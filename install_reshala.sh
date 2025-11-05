@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.29 dev- ЖЕЛЕЗНАЯ СТАБИЛЬНОСТЬ   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.291 dev - ХИРУРГИЧЕСКИЙ РЕЖИМ ==
 # ============================================================ #
-# ==    Починил баги, укрепил характер. Теперь без соплей.   ==
+# ==    Добавлен модуль для точечного редактирования файлов.   ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.29 dev"
+readonly VERSION="v0.291 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -28,6 +28,20 @@ get_net_status() {
     local qdisc; qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "n/a")
     if [ -z "$qdisc" ] || [ "$qdisc" = "pfifo_fast" ]; then qdisc=$(tc qdisc show 2>/dev/null | grep -Eo 'cake|fq' | head -n 1) || qdisc="n/a"; fi
     echo "$cc|$qdisc"
+}
+
+install_yq_if_needed() {
+    if ! command -v yq &> /dev/null; then
+        echo -e "${C_CYAN}🔪 Ставлю на место скальпель (yq)...${C_RESET}"
+        log "-> yq не найден, устанавливаю..."
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+        if ! command -v yq &> /dev/null; then
+            echo -e "${C_RED}❌ Не смог установить yq. Хирургия невозможна.${C_RESET}"; log "-> Ошибка установки yq."; return 1;
+        fi
+        echo -e "${C_GREEN}✅ Инструмент на месте.${C_RESET}"; log "-> yq установлен."
+    fi
+    return 0
 }
 
 # --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ ---
@@ -271,6 +285,62 @@ security_placeholder() {
     echo "Не лезь, пока не позовут. Сломаешь."
 }
 
+# --- МОДУЛЬ ХИРУРГИИ ---
+run_surgery() {
+    if ! install_yq_if_needed; then wait_for_enter; return; fi
+
+    echo "🔬 Сканирую пациента..."
+    local service_type=""
+    local compose_path=""
+    local container_name=""
+
+    if sudo docker ps --format '{{.Names}}' | grep -q -w "remnawave"; then
+        service_type="Панель"
+        container_name="remnawave"
+    elif sudo docker ps --format '{{.Names}}' | grep -q -w "remnanode"; then
+        service_type="Нода"
+        container_name="remnanode"
+    else
+        echo -e "${C_RED}❌ Не нашёл ни Панели, ни Ноды. Оперировать некого.${C_RESET}"; wait_for_enter; return;
+    fi
+    
+    echo -e "${C_GREEN}🎯 Цель захвачена: ${C_YELLOW}$service_type${C_RESET}"
+    log "Цель: $service_type ($container_name)"
+
+    echo " sniffing... Ищу конфиг..."
+    compose_path=$(sudo find / -name "docker-compose.yml" -type f -exec grep -l "container_name: $container_name" {} + 2>/dev/null | head -n 1)
+
+    if [ -z "$compose_path" ]; then
+        echo -e "${C_RED}❌ Не нашёл, блядь, его docker-compose.yml. Ты куда его спрятал?${C_RESET}"; wait_for_enter; return;
+    fi
+
+    echo -e "${C_GREEN}🗺️  Карта сокровищ найдена: ${C_YELLOW}$compose_path${C_RESET}"
+    log "Конфиг: $compose_path"
+    
+    # --- ЗДЕСЬ БУДЕТ ЛОГИКА ОПЕРАЦИИ ---
+    # Пример: Добавление папки для мини-приложения в Панель
+    if [ "$service_type" == "Панель" ]; then
+        echo "💉 Провожу операцию: добавляю том для 'miniapp'..."
+        
+        # Делаем бэкап перед операцией
+        sudo cp "$compose_path" "${compose_path}.bak_$(date +%F_%H-%M-%S)"
+        log "Создан бэкап: ${compose_path}.bak_..."
+
+        # Добавляем новый volume. Аккуратно, без шума и пыли.
+        sudo yq e '.services.remnawave.volumes += ["/opt/miniapp:/app/miniapp"]' -i "$compose_path"
+        
+        # Комментируем нахуй старый порт, если надо
+        # sudo yq e '(.services.remnawave.ports[] | select(. == "127.0.0.1:3000:3000")) |= comment("Этот порт больше не нужен, Решала рулит")' -i "$compose_path"
+
+        echo -e "${C_GREEN}✅ Операция завершена. Пациент жив.${C_RESET}"
+        echo "   Не забудь перезапустить контейнеры, чтобы он очухался: ${C_YELLOW}cd $(dirname "$compose_path") && sudo docker compose up -d --force-recreate${C_RESET}"
+    else
+        echo "Для Ноды пока операций не завезли. Свободен."
+    fi
+
+    wait_for_enter
+}
+
 # --- ИНФО-ПАНЕЛЬ ВЕРХНЕГО УРОВНЯ ---
 display_header() {
     ip_addr=$(hostname -I | awk '{print $1}')
@@ -312,6 +382,7 @@ show_menu() {
         echo "   [4] Посмотреть логи Бота 🤖"
         echo "   [5] Посмотреть логи Панели 📊"
         echo -e "   [6] Безопасность сервера ${C_YELLOW}(В разработке 🚧)${C_RESET}"
+        echo -e "   [7] ${C_CYAN}Хирургия Docker-файлов 🔪${C_RESET}"
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
             echo -e "   [u] ${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"
         fi
@@ -326,6 +397,7 @@ show_menu() {
             4) manage_log_path "BOT_LOG_PATH" "remnawave_bot" "Бота" "/opt/remnawave-bedolaga-telegram-bot" "$HOME/remnawave-bedolaga-telegram-bot";;
             5) manage_log_path "PANEL_LOG_PATH" "remnawave" "Панели" "/opt/remnawave" "$HOME/remnawave";;
             6) security_placeholder; wait_for_enter;;
+            7) run_surgery;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой? Нет такой кнопки."; sleep 2; fi;;
             [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;;
             *) echo "Ты прикалываешься? Нет такой кнопки."; sleep 2;;
