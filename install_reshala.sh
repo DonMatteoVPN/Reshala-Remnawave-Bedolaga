@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.26 - РАБОТА НАД ОШИБКАМИ     ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.27 - ФИНАЛЬНАЯ ПРАВКА        ==
 # ============================================================ #
 # ==       Теперь он сам себя обновляет и чинит.             ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.26"
+readonly VERSION="v0.27"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -190,32 +190,45 @@ ipv6_menu() {
     done
 }
 
-# --- МОДУЛЬ ЛОГОВ ---
+# --- МОДУЛЬ ЛОГОВ (ИСПРАВЛЕННЫЙ) ---
+view_logs_realtime() {
+    local log_path="$1"
+    local log_name="$2"
+
+    if [ ! -f "$log_path" ]; then
+        echo -e "❌ ${C_RED}Лог '$log_name' девственно чист. Ты ещё ничего не натворил.${C_RESET}";
+        sleep 2
+        return;
+    fi
+    echo "[*] Показываю журнал '$log_name' в реальном времени...";
+    echo "    (Нажми CTRL+C, чтобы свалить обратно)"
+    
+    # Ставим ловушку на Ctrl+C
+    trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1; return" INT
+
+    sudo tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}'
+    
+    # Снимаем ловушку
+    trap - INT
+}
+
 view_docker_logs() {
     local service_path="$1"; local service_name="$2"
     if [ -z "$service_path" ] || [ ! -d "$service_path" ] || [ ! -f "$service_path/docker-compose.yml" ]; then
         echo -e "❌ ${C_RED}Путь — хуйня, или там нет docker-compose.yml.${C_RESET}";
+        sleep 2
         return;
     fi
     echo "[*] Показываю потроха '$service_name' из [$service_path]...";
     echo "    (Нажми CTRL+C, чтобы свалить обратно)"
-    (cd "$service_path" && sudo docker compose logs -f) || true
-    echo -e "\n${C_GREEN}✅ Просмотр логов завершён.${C_RESET}"
-    sleep 1
-}
 
-# --- НОВАЯ ФУНКЦИЯ ДЛЯ ЛОГА ФОРСАЖА ---
-view_forsazh_log() {
-    if [ ! -f "$LOGFILE" ]; then
-        echo "❌ Лог девственно чист. Ты ещё ничего не натворил.";
-        return;
-    fi
-    echo "[*] Показываю журнал «Форсажа» в реальном времени...";
-    echo "    (Нажми CTRL+C, чтобы свалить обратно)"
-    # Команда || true глотает ошибку выхода по Ctrl+C
-    (sudo tail -f -n 50 "$LOGFILE" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true
-    echo -e "\n${C_GREEN}✅ Просмотр журнала завершён.${C_RESET}"
-    sleep 1
+    # Ставим ловушку
+    trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1; return" INT
+    
+    (cd "$service_path" && sudo docker compose logs -f)
+
+    # Снимаем ловушку
+    trap - INT
 }
 
 manage_log_path() {
@@ -283,7 +296,7 @@ show_menu() {
         case $choice in
             1) apply_bbr; wait_for_enter;;
             2) ipv6_menu;;
-            3) view_forsazh_log;;
+            3) view_logs_realtime "$LOGFILE" "Форсажа";;
             4) manage_log_path "BOT_LOG_PATH" "remnawave_bot" "Бота" "/opt/remnawave-bedolaga-telegram-bot" "$HOME/remnawave-bedolaga-telegram-bot";;
             5) manage_log_path "PANEL_LOG_PATH" "remnawave" "Панели" "/opt/remnawave" "$HOME/remnawave";;
             6) security_placeholder; wait_for_enter;;
@@ -306,5 +319,7 @@ else
         fi
         exit 1;
     fi
+    # Перед запуском главного меню, сбрасываем все ловушки на всякий случай
+    trap - INT TERM EXIT
     show_menu
 fi
