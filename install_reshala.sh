@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.29 - ЖЕЛЕЗНАЯ СТАБИЛЬНОСТЬ   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.29 dev- ЖЕЛЕЗНАЯ СТАБИЛЬНОСТЬ   ==
 # ============================================================ #
 # ==    Починил баги, укрепил характер. Теперь без соплей.   ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.29"
+readonly VERSION="v0.29 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
