@@ -11,7 +11,7 @@ set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
 readonly VERSION="v0.6"
-readonly SCRIPT_URL="hhttps://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
+readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
 INSTALL_PATH="/usr/local/bin/reshala"
