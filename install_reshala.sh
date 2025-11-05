@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.28 - УЛУЧШЕННЫЙ И ДОПОЛНЕННЫЙ ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.29 - ЖЕЛЕЗНАЯ СТАБИЛЬНОСТЬ   ==
 # ============================================================ #
-# ==    Теперь он умнее, чинит себя и предлагает лучшее.     ==
+# ==    Починил баги, укрепил характер. Теперь без соплей.   ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.28"
+readonly VERSION="v0.29"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -20,7 +20,7 @@ C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[0;33
 
 # --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | sudo tee -a "$LOGFILE"; }
-wait_for_enter() { read -p $'\nНажми Enter, если закончил...'; }
+wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
 save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
 load_path() { local key="$1"; [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" &>/dev/null; eval echo "\${$key:-}"; }
 get_net_status() {
@@ -48,7 +48,7 @@ install_script() {
         echo "alias reshala='sudo reshala'" | sudo tee -a /root/.bashrc >/dev/null
     fi
 
-    echo -e "\n${C_GREEN}✅ ИНТЕГРАЦИЯ ЗАВЕРШЕНА.${C_RESET}\n"
+    echo -e "\n${C_GREEN}✅ Готово. Решала в системе.${C_RESET}\n"
     
     if [[ $(id -u) -eq 0 ]]; then
         echo -e "   ${C_BOLD}Команда запуска:${C_RESET} ${C_YELLOW}reshala${C_RESET}"
@@ -222,16 +222,14 @@ view_logs_realtime() {
         sleep 2
         return;
     fi
-    echo "[*] Показываю журнал '$log_name' в реальном времени...";
-    echo "    (Нажми CTRL+C, чтобы свалить обратно)"
+    echo "[*] Смотрю журнал '$log_name'... (Нажми CTRL+C, чтобы свалить обратно)";
     
-    # Ставим ловушку на Ctrl+C
-    trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1; return" INT
-
-    sudo tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}'
+    trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
     
-    # Снимаем ловушку
+    (sudo tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true
+    
     trap - INT
+    return 0
 }
 
 view_docker_logs() {
@@ -241,16 +239,14 @@ view_docker_logs() {
         sleep 2
         return;
     fi
-    echo "[*] Показываю потроха '$service_name' из [$service_path]...";
-    echo "    (Нажми CTRL+C, чтобы свалить обратно)"
+    echo "[*] Смотрю потроха '$service_name'... (Нажми CTRL+C, чтобы свалить обратно)";
 
-    # Ставим ловушку
-    trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1; return" INT
+    trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
     
-    (cd "$service_path" && sudo docker compose logs -f)
+    (cd "$service_path" && sudo docker compose logs -f) || true
 
-    # Снимаем ловушку
     trap - INT
+    return 0
 }
 
 manage_log_path() {
@@ -259,7 +255,7 @@ manage_log_path() {
         clear; local current_path; current_path=$(load_path "$service_key")
         echo "--- ЛОГИ: $service_human_name ---";
         if [ -n "$current_path" ]; then
-            echo "Путь: $current_path"; echo "--------------------------"; echo "   1. Посмотреть"; echo "   2. Стереть путь (указать заново)"; echo "   b. Назад"; read -r -p "Что делаем?: " choice
+            echo "Путь: $current_path"; echo "--------------------------"; echo "   1. Посмотреть"; echo "   2. Стереть путь (указать заново)"; echo "   b. Назад"; read -r -p "Твой ход: " choice
             case $choice in 1) view_docker_logs "$current_path" "$service_name_dc";; 2) save_path "$service_key" ""; echo "✅ Путь стёрт."; sleep 1;; [bB]) break;; *) echo "1, 2 или 'b'. Других кнопок нет."; sleep 2;; esac
         else
             echo "Путь не указан. Где искать это говно?"; echo "--------------------------"; echo "   1. Стандартный путь ($default_path_opt)"; echo "   2. В папке рута ($default_path_root)"; echo "   3. Указать свой путь"; echo "   b. Назад"; read -r -p "Твой выбор: " choice
@@ -349,7 +345,6 @@ else
         fi
         exit 1;
     fi
-    # Перед запуском главного меню, сбрасываем все ловушки на всякий случай
     trap - INT TERM EXIT
     show_menu
 fi
