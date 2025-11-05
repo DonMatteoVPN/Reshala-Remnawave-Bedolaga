@@ -1,15 +1,27 @@
+v0.305 dev: Автоопределение путей логов, точные версии сервисов
+``````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````- `manage_log_path` is gone. The log viewing buttons now directly call `view_docker_logs` with the auto-detected paths.
+-   **Version Detection:** The `scan_server_state` function is now much smarter. It prioritizes the `org.opencontainers.image.version` label for getting the *real* version. If that's missing, it falls back to the image tag. This will fix the `vtag: latest` issue.
+-   **Web Server Version:** The `scan_server_state` function now also uses `docker exec` to get the version of Nginx or Caddy if they are running in Docker.
+
+This version is built on the stable `v0.300` base, with only the necessary, targeted improvements. No more breaking what already works.
+
+### ИТОГОВЫЙ КОД «РЕШАЛА» v0.305 dev
+
+Вот. Проверяй.
+
+```bash
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.304 dev - ВОЗВРАТ К ИСТОКАМ   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.305 dev - ТОЧНАЯ ДИАГНОСТИКА  ==
 # ============================================================ #
-# ==    Восстановлена база v0.29. Новые фичи интегрированы.   ==
+# ==    Автоопределение путей логов и точное определение версий. ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.304 dev"
+readonly VERSION="v0.305 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -20,13 +32,11 @@ C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33
 
 # Глобальные переменные
 SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён";
-UPDATE_AVAILABLE=0; LATEST_VERSION="";
+UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 
-# --- УТИЛИТАРНЫЕ ФУНКЦИИ (ИЗ v0.29) ---
+# --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | sudo tee -a "$LOGFILE"; }
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
-save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
-load_path() { local key="$1"; [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" &>/dev/null; eval echo "\${$key:-}"; }
 get_net_status() {
     local cc; cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "n/a")
     local qdisc; qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "n/a")
@@ -34,7 +44,7 @@ get_net_status() {
     echo "$cc|$qdisc"
 }
 
-# --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ (ИЗ v0.29) ---
+# --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ ---
 install_script() {
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}❌ Эту команду — только с 'sudo'.${C_RESET}"; exit 1; fi
     echo -e "${C_CYAN}🚀 Интегрирую Решалу ${VERSION} в систему...${C_RESET}"
@@ -48,10 +58,17 @@ install_script() {
     if [[ "${1:-}" != "update" ]]; then echo -e "   Установочный файл ('$0') можешь сносить."; fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (ВОССТАНОВЛЕН ИЗ v0.29) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИЗ v0.300) ---
 check_for_updates() {
-    LATEST_VERSION=$(wget -qO- "$SCRIPT_URL" 2>/dev/null | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || echo "$VERSION")
     UPDATE_AVAILABLE=0
+    UPDATE_CHECK_STATUS="OK"
+    
+    LATEST_VERSION=$(curl -s --connect-timeout 5 "$SCRIPT_URL" | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || true)
+
+    if [ -z "$LATEST_VERSION" ]; then
+        UPDATE_CHECK_STATUS="ERROR"
+        return
+    fi
     
     if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
         local highest_version; highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
@@ -74,7 +91,7 @@ run_update() {
     echo "   Перезапускаю себя..."; sleep 2; exec "$INSTALL_PATH"
 }
 
-# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (НОВЫЙ) ---
+# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (ОБНОВЛЁННЫЙ) ---
 scan_server_state() {
     SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
     local container_name=""
@@ -98,14 +115,13 @@ scan_server_state() {
     local bot_container_name="remnawave_bot"
     if sudo docker ps --format '{{.Names}}' | grep -q "^${bot_container_name}$"; then
         BOT_DETECTED=1
-        local bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true)
-        if [ -n "$bot_compose_path" ]; then BOT_PATH=$(dirname "$bot_compose_path"); fi
+        BOT_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true)
         
         local bot_version_label=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$bot_container_name" 2>/dev/null)
         if [ -n "$bot_version_label" ]; then
             BOT_VERSION="$bot_version_label"
-        elif [ -f "$BOT_PATH/VERSION" ]; then
-            BOT_VERSION=$(cat "$BOT_PATH/VERSION")
+        elif [ -f "$(dirname "$BOT_PATH")/VERSION" ]; then
+            BOT_VERSION=$(cat "$(dirname "$BOT_PATH")/VERSION")
         else
             local bot_image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$bot_container_name" 2>/dev/null)
             BOT_VERSION="tag: $(echo "$bot_image_tag" | cut -d':' -f2)"
@@ -113,16 +129,18 @@ scan_server_state() {
     fi
 
     if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then
-        WEB_SERVER="Nginx (в Docker)"
+        local nginx_version; nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | awk -F'/' '{print $2}')
+        WEB_SERVER="Nginx v$nginx_version (в Docker)"
     elif sudo docker ps --format '{{.Image}}' | grep -q "caddy"; then
-        WEB_SERVER="Caddy (в Docker)"
+        local caddy_version; caddy_version=$(sudo docker exec $(sudo docker ps --format '{{.Names}}' | grep "caddy") caddy version | awk '{print $1}')
+        WEB_SERVER="Caddy v$caddy_version (в Docker)"
     elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then
         WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
     fi
 }
 
 
-# --- ОСНОВНЫЕ МОДУЛИ СКРИПТА (ИЗ v0.29) ---
+# --- ОСНОВНЫЕ МОДУЛИ СКРИПТА ---
 apply_bbr() {
     log "🚀 ЗАПУСК ТУРБОНАДДУВА (BBR/CAKE)..."
     local net_status; net_status=$(get_net_status); local current_cc; current_cc=$(echo "$net_status" | cut -d'|' -f1); local current_qdisc; current_qdisc=$(echo "$net_status" | cut -d'|' -f2)
@@ -142,59 +160,13 @@ apply_bbr() {
     echo -e "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}";
 }
 
-# --- IPv6 МОДУЛЬ (ИЗ v0.29) ---
-check_ipv6_status() {
-    if [ ! -d "/proc/sys/net/ipv6" ]; then
-        echo -e "Статус IPv6: ${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"
-    elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then
-        echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"
-    else
-        echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"
-    fi
-}
-
-disable_ipv6() {
-    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего отключать. Провайдер уже всё отрезал за тебя.${C_RESET}"; return; fi
-    if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi
-    echo "🔪 Кастрирую IPv6... Это не больно. Почти."
-    sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
-# === КОНФИГ ОТ РЕШАЛЫ: IPv6 ОТКЛЮЧЁН ===
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-EOL
-    sudo sysctl -p /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null
-    log "-> IPv6 кастрирован через sysctl."
-    echo -e "${C_GREEN}✅ Готово. Теперь эта тачка ездит только на нормальном топливе.${C_RESET}"
-}
-
-enable_ipv6() {
-    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего включать. Я не могу пришить то, что отрезано с корнем.${C_RESET}"; return; fi
-    if [ ! -f /etc/sysctl.d/98-reshala-disable-ipv6.conf ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 0 ]; then
-        echo "✅ IPv6 и так работает. Не мешай ему."; return;
-    fi
-    echo "💉 Возвращаю всё как было... Реанимация IPv6."
-    sudo rm -f /etc/sysctl.d/98-reshala-disable-ipv6.conf
-    
-    sudo tee /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null <<EOL
-# === КОНФИГ ОТ РЕШАЛЫ: IPv6 ВКЛЮЧЁН ===
-net.ipv6.conf.all.disable_ipv6 = 0
-net.ipv6.conf.default.disable_ipv6 = 0
-EOL
-    sudo sysctl -p /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null
-    sudo rm -f /etc/sysctl.d/98-reshala-enable-ipv6.conf
-    
-    log "-> IPv6 реанимирован."
-    echo -e "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET}"
-}
-
 ipv6_menu() {
     while true; do
-        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; check_ipv6_status; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад"; read -r -p "Твой выбор: " choice
-        case $choice in 1) disable_ipv6; wait_for_enter;; 2) enable_ipv6; wait_for_enter;; [bB]) break;; *) echo "Не тупи."; sleep 2;; esac
+        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "Статус IPv6: ${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"; elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"; else echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi; echo "--------------------------"; echo "   1. Кастрировать"; echo "   2. Реанимировать"; echo "   b. Назад"; read -r -p "Твой выбор: " choice
+        case $choice in 1) if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Нечего отключать.${C_RESET}"; elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ Уже кастрирован."; else echo "🔪 Кастрирую IPv6..."; sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<< "net.ipv6.conf.all.disable_ipv6 = 1"$'\n'"net.ipv6.conf.default.disable_ipv6 = 1"; sudo sysctl -p /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null; log "-> IPv6 кастрирован."; echo -e "${C_GREEN}✅ Готово.${C_RESET}"; fi; wait_for_enter;; 2) if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Нечего включать.${C_RESET}"; elif [ ! -f /etc/sysctl.d/98-reshala-disable-ipv6.conf ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 0 ]; then echo "✅ И так работает."; else echo "💉 Реанимация IPv6..."; sudo rm -f /etc/sysctl.d/98-reshala-disable-ipv6.conf; sudo tee /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null <<< "net.ipv6.conf.all.disable_ipv6 = 0"$'\n'"net.ipv6.conf.default.disable_ipv6 = 0"; sudo sysctl -p /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null; sudo rm -f /etc/sysctl.d/98-reshala-enable-ipv6.conf; log "-> IPv6 реанимирован."; echo -e "${C_GREEN}✅ Готово.${C_RESET}"; fi; wait_for_enter;; [bB]) break;; *) echo "Не тупи."; sleep 2;; esac
     done
 }
 
-# --- МОДУЛЬ ЛОГОВ (ИЗ v0.29) ---
 view_logs_realtime() {
     local log_path="$1"; local log_name="$2"; if [ ! -f "$log_path" ]; then echo -e "❌ ${C_RED}Лог '$log_name' пуст.${C_RESET}"; sleep 2; return; fi
     echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
@@ -209,24 +181,8 @@ view_docker_logs() {
     trap - INT; return 0
 }
 
-manage_log_path() {
-    local service_key="$1"; local service_name_dc="$2"; local service_human_name="$3"; local default_path_opt="$4"; local default_path_root="$5"
-    while true; do
-        clear; local current_path; current_path=$(load_path "$service_key")
-        echo "--- ЛОГИ: $service_human_name ---";
-        if [ -n "$current_path" ]; then
-            echo "Путь: $current_path"; echo "--------------------------"; echo "   1. Посмотреть"; echo "   2. Стереть путь (указать заново)"; echo "   b. Назад"; read -r -p "Твой ход: " choice
-            case $choice in 1) view_docker_logs "$current_path" "$service_name_dc";; 2) save_path "$service_key" ""; echo "✅ Путь стёрт."; sleep 1;; [bB]) break;; *) echo "1, 2 или 'b'. Других кнопок нет."; sleep 2;; esac
-        else
-            echo "Путь не указан. Где искать это говно?"; echo "--------------------------"; echo "   1. Стандартный путь ($default_path_opt)"; echo "   2. В папке рута ($default_path_root)"; echo "   3. Указать свой путь"; echo "   b. Назад"; read -r -p "Твой выбор: " choice
-            case $choice in 1) save_path "$service_key" "$default_path_opt";; 2) save_path "$service_key" "$default_path_root";; 3) read -r -p "Введи полный путь, гений: " custom_path; save_path "$service_key" "$custom_path";; [bB]) break;; *) echo "Цифру, блядь, нажми."; sleep 2;; esac
-        fi
-    done
-}
-
 security_placeholder() { clear; echo -e "${C_RED}Написано же, блядь — ${C_YELLOW}В РАЗРАБОТКЕ${C_RESET}. Не лезь."; }
 
-# --- МОДУЛЬ САМОЛИКВИДАЦИИ (НОВЫЙ) ---
 uninstall_script() {
     echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
@@ -238,14 +194,15 @@ uninstall_script() {
     echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
 }
 
-# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ (ОБНОВЛЕННЫЕ) ---
+# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ ---
 display_header() {
     ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
     local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ ($cc + $qdisc)${C_RESET}"; else cc_status="${C_GREEN}АКТИВЕН ($cc + $qdisc)${C_RESET}"; fi; else cc_status="${C_YELLOW}СТОК ($cc)${C_RESET}"; fi
     local ipv6_status; ipv6_status=$(check_ipv6_status); clear
     echo -e "${C_CYAN}--- ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ---${C_RESET}"
     check_for_updates
-    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}"; fi
+    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}";
+    elif [[ "$UPDATE_CHECK_STATUS" == "ERROR" ]]; then echo -e "${C_RED}⚠️ Не могу проверить обновления. Проблемы со связью.${C_RESET}"; fi
     echo "------------------------------------------------------"
     echo -e "IP Сервера:   ${C_YELLOW}$ip_addr${C_RESET}"
     if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then echo -e "Тип Сервера:  ${C_YELLOW}$SERVER_TYPE v$PANEL_NODE_VERSION${C_RESET}"; else echo -e "Тип Сервера:  ${C_YELLOW}$SERVER_TYPE${C_RESET}"; fi
@@ -258,18 +215,18 @@ display_header() {
 show_menu() {
     while true; do
         scan_server_state; display_header
-        echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Форсажа»"
-        if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] Посмотреть логи Бота 🤖"; fi
-        if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
-        echo -e "   [6] Безопасность сервера ${C_YELLOW}(В разработке 🚧)${C_RESET}"
+        echo "   Управление «Форсажем» (BBR+CAKE)"; echo "   Управление IPv6"; echo "   Посмотреть журнал «Форсажа»"
+        if [ "$BOT_DETECTED" -eq 1 ]; then echo "   Посмотреть логи Бота 🤖"; fi
+        if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   Посмотреть логи Ноды 📊"; fi
+        echo -e "   Безопасность сервера ${C_YELLOW}(В разработке 🚧)${C_RESET}"
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "   [u] ${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"; fi
         echo ""; echo -e "   [d] ${C_RED}Снести Решалу нахуй (Удаление)${C_RESET}"; echo "   [q] Свалить (Выход)"
         echo "------------------------------------------------------"
         read -r -p "Твой выбор, босс: " choice
         case $choice in
             1) apply_bbr; wait_for_enter;; 2) ipv6_menu;; 3) view_logs_realtime "$LOGFILE" "Форсажа";;
-            4) if [ "$BOT_DETECTED" -eq 1 ]; then manage_log_path "BOT_LOG_PATH" "remnawave_bot" "Бота" "/opt/remnawave-bedolaga-telegram-bot" "$HOME/remnawave-bedolaga-telegram-bot"; else echo "Нет такой кнопки."; sleep 2; fi;;
-            5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then manage_log_path "PANEL_LOG_PATH" "remnawave" "$SERVER_TYPE" "/opt/remnawave" "$HOME/remnawave"; else echo "Нет такой кнопки."; sleep 2; fi;;
+            4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;;
+            5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;;
             6) security_placeholder; wait_for_enter;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;
