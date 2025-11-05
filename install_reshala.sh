@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.293 dev - DEV-КАНАЛ ОБНОВЛЕНИЙ ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.294 dev - ЛАЗЕРНЫЙ ПРИЦЕЛ    ==
 # ============================================================ #
-# ==    Переключил источник обновлений на dev-ветку.         ==
+# ==    Исправил логику определения цели и поиска конфига.    ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.293 dev"
+readonly VERSION="v0.294 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -285,7 +285,7 @@ security_placeholder() {
     echo "Не лезь, пока не позовут. Сломаешь."
 }
 
-# --- МОДУЛЬ ХИРУРГИИ ---
+# --- МОДУЛЬ ХИРУРГИИ (ИСПРАВЛЕННЫЙ) ---
 run_surgery() {
     if ! install_yq_if_needed; then wait_for_enter; return; fi
 
@@ -294,10 +294,10 @@ run_surgery() {
     local compose_path=""
     local container_name=""
 
-    if sudo docker ps --format '{{.Names}}' | grep -q -w "remnawave"; then
+    if sudo docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then
         service_type="Панель"
         container_name="remnawave"
-    elif sudo docker ps --format '{{.Names}}' | grep -q -w "remnanode"; then
+    elif sudo docker ps --format '{{.Names}}' | grep -q "^remnanode$"; then
         service_type="Нода"
         container_name="remnanode"
     else
@@ -307,11 +307,11 @@ run_surgery() {
     echo -e "${C_GREEN}🎯 Цель захвачена: ${C_YELLOW}$service_type${C_RESET}"
     log "Цель: $service_type ($container_name)"
 
-    echo " sniffing... Ищу конфиг..."
-    compose_path=$(sudo find / -name "docker-compose.yml" -type f -exec grep -l "container_name: $container_name" {} + 2>/dev/null | head -n 1)
+    echo " sniffing... Ищу конфиг по-умному..."
+    compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$container_name" 2>/dev/null)
 
     if [ -z "$compose_path" ]; then
-        echo -e "${C_RED}❌ Не нашёл, блядь, его docker-compose.yml. Ты куда его спрятал?${C_RESET}"; wait_for_enter; return;
+        echo -e "${C_RED}❌ Не нашёл, блядь, его docker-compose.yml через Docker. Ты его точно через compose запускал?${C_RESET}"; wait_for_enter; return;
     fi
 
     echo -e "${C_GREEN}🗺️  Карта сокровищ найдена: ${C_YELLOW}$compose_path${C_RESET}"
