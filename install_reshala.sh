@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.296 dev - СТАБИЛЬНАЯ БАЗА + НОВЫЙ ФУНКЦИОНАЛ ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.297 dev - НОВОЕ ЗРЕНИЕ       ==
 # ============================================================ #
-# ==    Взята рабочая основа v0.29 и дополнен автоопределением. ==
+# ==    Добавил определение веб-сервера и точную версию.     ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.296 dev"
+readonly VERSION="v0.297 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -25,6 +25,7 @@ PANEL_NODE_PATH=""
 BOT_DETECTED=0
 BOT_VERSION=""
 BOT_PATH=""
+WEB_SERVER="Не определён"
 
 # --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | sudo tee -a "$LOGFILE"; }
@@ -112,30 +113,31 @@ run_update() {
     exec "$INSTALL_PATH"
 }
 
-# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (НОВЫЙ) ---
-detect_services() {
-    SERVER_TYPE="Чистый сервак"
-    PANEL_NODE_VERSION=""
-    PANEL_NODE_PATH=""
-    BOT_DETECTED=0
-    BOT_VERSION=""
-    BOT_PATH=""
+# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (ОБНОВЛЁННЫЙ) ---
+scan_server_state() {
+    # Сброс
+    SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
 
+    # Определение Панели/Ноды
     local container_name=""
     if sudo docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then
-        SERVER_TYPE="Панель"
-        container_name="remnawave"
+        SERVER_TYPE="Панель"; container_name="remnawave"
     elif sudo docker ps --format '{{.Names}}' | grep -q "^remnanode$"; then
-        SERVER_TYPE="Нода"
-        container_name="remnanode"
+        SERVER_TYPE="Нода"; container_name="remnanode"
     fi
 
     if [ -n "$container_name" ]; then
         PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$container_name" 2>/dev/null)
-        local image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null)
-        PANEL_NODE_VERSION=$(echo "$image_tag" | cut -d':' -f2)
+        local version_label=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null)
+        if [ -n "$version_label" ]; then
+            PANEL_NODE_VERSION="$version_label"
+        else
+            local image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null)
+            PANEL_NODE_VERSION=$(echo "$image_tag" | cut -d':' -f2)
+        fi
     fi
 
+    # Определение Бота
     local bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "remnawave_bot" 2>/dev/null || true)
     if [ -n "$bot_compose_path" ]; then
         BOT_DETECTED=1
@@ -146,6 +148,15 @@ detect_services() {
             local bot_image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "remnawave_bot" 2>/dev/null)
             BOT_VERSION="tag: $(echo "$bot_image_tag" | cut -d':' -f2)"
         fi
+    fi
+
+    # Определение Веб-сервера
+    if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then
+        WEB_SERVER="Nginx (в Docker)"
+    elif sudo docker ps --format '{{.Image}}' | grep -q "caddy"; then
+        WEB_SERVER="Caddy (в Docker)"
+    elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then
+        WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
     fi
 }
 
@@ -280,7 +291,7 @@ security_placeholder() {
     clear; echo -e "${C_RED}Написано же, блядь — ${C_YELLOW}В РАЗРАБОТКЕ${C_RESET}. Не лезь.";
 }
 
-# --- МОДУЛЬ САМОЛИКВИДАЦИИ (НОВЫЙ) ---
+# --- МОДУЛЬ САМОЛИКВИДАЦИИ ---
 uninstall_script() {
     echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
@@ -312,6 +323,7 @@ display_header() {
         echo -e "Тип Сервера:  ${C_YELLOW}$SERVER_TYPE${C_RESET}"
     fi
     if [ "$BOT_DETECTED" -eq 1 ]; then echo -e "Версия Бота:  ${C_CYAN}$BOT_VERSION${C_RESET}"; fi
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then echo -e "Веб-сервер:   ${C_CYAN}$WEB_SERVER${C_RESET}"; fi
     echo -e "Статус BBR:   $cc_status"
     echo -e "$ipv6_status"
     echo "------------------------------------------------------"
@@ -321,7 +333,7 @@ display_header() {
 
 show_menu() {
     while true; do
-        detect_services
+        scan_server_state
         display_header
         echo "   [1] Управление «Форсажем» (BBR+CAKE)"
         echo "   [2] Управление IPv6"
