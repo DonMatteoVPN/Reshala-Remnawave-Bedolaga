@@ -35,6 +35,12 @@
 source "${SCRIPT_DIR}/modules/skynet/keys.sh"
 source "${SCRIPT_DIR}/modules/skynet/db.sh"
 source "${SCRIPT_DIR}/modules/skynet/executor.sh"
+source "${SCRIPT_DIR}/modules/core/self_update.sh"
+
+_skynet_is_local_newer() {
+    # Возвращает 0, если локальная версия ($1) новее удаленной ($2)
+    _self_update_is_remote_newer "$2" "$1"
+}
 
 # ============================================================ #
 #                ДЕЙСТВИЯ МЕНЮ SKYNET                          #
@@ -315,11 +321,12 @@ _show_server_management_menu() {
 
         if [[ -z "$remote_ver" ]] || _skynet_is_local_newer "$VERSION" "$remote_ver"; then
             warn "Требуется установка/обновление агента..."
-            local install_cmd="RESHALA_NO_AUTOSTART=1 wget -qO /tmp/i.sh ${INSTALLER_URL_RAW} && bash /tmp/i.sh"
+            # Экспортируем переменную, чтобы она была доступна для `bash /tmp/i.sh` даже внутри `sudo bash -c '...'`
+            local install_cmd="export RESHALA_NO_AUTOSTART=1; wget -qO /tmp/i.sh ${INSTALLER_URL_RAW} && bash /tmp/i.sh"
             if ! run_remote "$install_cmd"; then err "Не удалось развернуть агента."; wait_for_enter; return; fi
             ok "Агент развёрнут."
         else
-            ok "OK (${remote_ver})"
+            ok "Агент готов: (${remote_ver})"
         fi
         
         printf_info "Вхожу в удалённый терминал..."
