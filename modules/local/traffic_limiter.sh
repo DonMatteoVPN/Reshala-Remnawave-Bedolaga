@@ -1084,8 +1084,8 @@ log "🚀 Запуск Reshala Traffic Limiter (U32 Hash Mode)..."
 # === ПРОВЕРКА ДОСТУПНОСТИ HTB ===
 if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
     local KERNEL_VERSION
-    KERNEL_VERSION=\$(uname -r)
-    log "⚠️ Модуль sch_htb недоступен на ядре: \$KERNEL_VERSION"
+    KERNEL_VERSION=\\$(uname -r)
+    log "⚠️ Модуль sch_htb недоступен на ядре: \\$KERNEL_VERSION"
     log "Пытаюсь установить модули..."
     
     if [[ -f /etc/os-release ]]; then
@@ -1093,12 +1093,12 @@ if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
         if [[ "$ID" == "debian" ]]; then
             log "Обнаружен Debian. Устанавливаю модули..."
             apt update &>/dev/null
-            apt install -y linux-image-$(uname -r) &>/dev/null || \
+            apt install -y linux-image-\$(uname -r) &>/dev/null || \
             apt install -y linux-image-amd64 &>/dev/null
         elif [[ "$ID" == "ubuntu" ]]; then
             log "Обнаружен Ubuntu. Устанавливаю модули..."
             apt update &>/dev/null
-            apt install -y linux-modules-extra-$(uname -r) &>/dev/null
+            apt install -y linux-modules-extra-\$(uname -r) &>/dev/null
         fi
     fi
     
@@ -1107,11 +1107,11 @@ if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
     if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
         log "❌ ОШИБКА: HTB недоступен!"
         log ""
-        log "Текущее ядро: $KERNEL_VERSION"
+        log "Текущее ядро: \$KERNEL_VERSION"
         
         if zcat /proc/config.gz 2>/dev/null | grep -q "CONFIG_NET_SCH_HTB is not set"; then
             log "Причина: HTB выключен в конфигурации ядра"
-        elif [[ ! -d "/lib/modules/$KERNEL_VERSION/kernel/net/sched" ]]; then
+        elif [[ ! -d "/lib/modules/\$KERNEL_VERSION/kernel/net/sched" ]]; then
             log "Причина: Модули TC отсутствуют для этого ядра"
         fi
         
