@@ -10,8 +10,6 @@
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/assets/reshala-logo.jpg)
 ![Dashbord](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/assets/dashbord.png)
 
-![Dashboard](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/assets/dashbord.png)
-
 <p align="center">
   <br>
   <strong>⚠️ ATTENTION: THIS PROJECT IS IN ACTIVE DEVELOPMENT (ALPHA STAGE) ⚠️</strong>
