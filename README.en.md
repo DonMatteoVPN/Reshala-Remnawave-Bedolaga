@@ -5,7 +5,7 @@
 
 <a id="en"></a>
 
-# Reshala Tool 🚀 v2.60
+# Reshala Tool 🚀
 
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/assets/reshala-logo.jpg)
 ![Dashbord](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/assets/dashbord.png)
