@@ -317,12 +317,7 @@ _show_server_management_menu() {
             warn "Требуется установка/обновление агента..."
             local install_cmd="RESHALA_NO_AUTOSTART=1 wget -qO /tmp/i.sh ${INSTALLER_URL_RAW} && bash /tmp/i.sh"
             if ! run_remote "$install_cmd"; then err "Не удалось развернуть агента."; wait_for_enter; return; fi
-            
-            # ЭТО КРИТИЧЕСКИ ВАЖНО. Среда не готова сразу.
-            ok "Агент развёрнут. Теперь нужно переподключиться."
-            printf_warning "Нажми ENTER, чтобы вернуться в меню флота, а затем выбери сервер ещё раз."
-            wait_for_enter
-            return 
+            ok "Агент развёрнут."
         else
             ok "OK (${remote_ver})"
         fi
@@ -330,8 +325,8 @@ _show_server_management_menu() {
         printf_info "Вхожу в удалённый терминал..."
         local ssh_opts=(-t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port")
         local remote_target="${s_user}@${s_ip}"
-        # Исполняем команду через 'bash -l -c' чтобы гарантировать корректный $PATH после установки
-        local remote_exec_command="bash -l -c 'SKYNET_MODE=1 ${INSTALL_PATH}'"
+        # Исполняем команду через 'bash -l -c' и по абсолютному пути, чтобы гарантировать корректный $PATH
+        local remote_exec_command="bash -l -c 'SKYNET_MODE=1 /opt/reshala/reshala.sh'"
 
         if [[ "$s_user" == "root" ]]; then
             ssh "${ssh_opts[@]}" "$remote_target" "$remote_exec_command"
