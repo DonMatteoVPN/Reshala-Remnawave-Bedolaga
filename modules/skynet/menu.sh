@@ -317,11 +317,12 @@ _show_server_management_menu() {
             warn "Требуется установка/обновление агента..."
             local install_cmd="RESHALA_NO_AUTOSTART=1 wget -qO /tmp/i.sh ${INSTALLER_URL_RAW} && bash /tmp/i.sh"
             if ! run_remote "$install_cmd"; then err "Не удалось развернуть агента."; wait_for_enter; return; fi
-            ok "Агент развёрнут. Происходит автоматическое переподключение..."
-            sleep 2 # Даем пользователю время прочитать сообщение
-            # Рекурсивный вызов самих себя для переподключения
-            _sm_connect 
-            return # Важно, чтобы выйти из текущего вызова
+            
+            # ЭТО КРИТИЧЕСКИ ВАЖНО. Среда не готова сразу.
+            ok "Агент развёрнут. Теперь нужно переподключиться."
+            printf_warning "Нажми ENTER, чтобы вернуться в меню флота, а затем выбери сервер ещё раз."
+            wait_for_enter
+            return 
         else
             ok "OK (${remote_ver})"
         fi
