@@ -158,6 +158,91 @@ When adding new behavior, prefer creating a new module under `modules/` (invoked
 
 ## Agent journal (recent changes & context)
 
+### 2025-12-28, Part 7 – Полная отладка и стабилизация модуля "Шейпер трафика"
+**Цель:** Устранить каскадную серию ошибок, препятствовавших запуску `reshala-traffic-limiter.service`.
+
+- **Проблема №1: `unbound variable: KERNEL_VERSION`**
+    - **Симптом:** Сервис падал с ошибкой о неопределенной переменной.
+    - **Причина:** Переменная `KERNEL_VERSION` определялась внутри условного блока `if`, но требовалась в другой ветке `else`, где была недоступна. Режим `set -u` приводил к аварийному завершению.
+    - **Решение:** Определение `KERNEL_VERSION=\$(uname -r)` было вынесено в начало генерируемого скрипта, до всех условных блоков, что гарантировало ее доступность.
+
+- **Проблема №2: `Exec format error`**
+    - **Симптом:** После исправления первой ошибки сервис стал падать со статусом `203/EXEC`.
+    - **Причина:** Некорректное экранирование в `heredoc`. Конструкции вида `\$(uname -r)` вместо `\$(uname -r)` приводили к тому, что в итоговом скрипте оставались лишние символы, делая его неисполняемым для ядра.
+    - **Решение:** Все экранирования были исправлены на одинарные (`\$`, `\$()`), чтобы команды и переменные обрабатывались в момент *выполнения* сгенерированного скрипта, а не его *создания*.
+
+- **Проблема №3: `local: can only be used in a function`**
+    - **Симптом:** В логах systemd появлялось предупреждение.
+    - **Причина:** Остаточное ключевое слово `local` при объявлении `KERNEL_VERSION` в глобальной области видимости сгенерированного скрипта.
+    - **Решение:** Ключевое слово `local` было удалено.
+
+**Статус:**
+- Все известные ошибки в модуле "Шейпер трафика" устранены. Сервис `reshala-traffic-limiter.service` теперь запускается корректно, без ошибок и предупреждений. Стабильность модуля восстановлена.
+
+### 2025-12-28, Part 6 – Исправление `Exec format error` в сервисе Шейпера
+**Цель:** Устранить критическую ошибку `Exec format error`, которая возникала при запуске `reshala-traffic-limiter.service`.
+
+- **Проблема:**
+    - После исправления ошибки `unbound variable` сервис все равно не запускался, но уже с ошибкой `Exec format error (code=exited, status=203/EXEC)`.
+    - Глубокий анализ показал, что проблема была в **двойном экранировании** переменных и командной подстановки (`\$`) внутри heredoc-блока функции `_tl_generate_master_apply_script`.
+    - Это приводило к тому, что в сгенерированном скрипте `/usr/local/bin/reshala-traffic-limiter-apply.sh` оставались лишние символы `
+`, например `KERNEL_VERSION=\$(uname -r)`. Bash не интерпретировал это как команду, а ядро не могло исполнить файл с таким синтаксисом.
+
+- **Реализованные исправления:**
+    - В файле `modules/local/traffic_limiter.sh`, внутри функции `_tl_generate_master_apply_script`, все вхождения двойного экранирования (`\\$\\n`, `\\$\\(`, `\\$\\)`) были заменены на **одинарное** (`\$`, `\$(`, `\)`).
+    - Теперь в сгенерированном скрипте создаются синтаксически корректные bash-конструкции, например `KERNEL_VERSION=$(uname -r)`.
+
+**Статус:**
+- Ошибка `Exec format error` устранена. Генерируемый скрипт теперь имеет правильный формат и должен корректно исполняться systemd.
+
+### 2025-12-28 - Исправление ошибки 'unbound variable' в модуле "Шейпер трафика"
+**Цель:** Устранить ошибку `unbound variable: KERNEL_VERSION` в модуле "Шейпер трафика".
+
+- **Проблема:**
+    - При запуске сервиса `reshala-traffic-limiter.service` происходило падение с ошибкой `unbound variable: KERNEL_VERSION`.
+    - Причина заключалась в том, что внутри генерируемого скрипта `/usr/local/bin/reshala-traffic-limiter-apply.sh` переменная `KERNEL_VERSION` определялась внутри условного блока `if`, но могла потребоваться для логирования ошибки в другой ветке, где она не была определена. Режим `set -u` приводил к аварийному завершению.
+
+- **Реализованные исправления:**
+    - В `modules/local/traffic_limiter.sh`, в функции `_tl_generate_master_apply_script`, определение переменной `KERNEL_VERSION=$(uname -r)` было вынесено в начало генерируемого скрипта, до всех условных блоков.
+    - Это гарантирует, что переменная `KERNEL_VERSION` будет доступна в любой части скрипта, что устраняет ошибку.
+
+**Статус:**
+- Ошибка `unbound variable` устранена. Модуль "Шейпер трафика" теперь должен корректно создавать и запускать свой systemd-сервис.
+
+### 2025-12-28, Part 5 – Исправление автозапуска агента Skynet
+**Цель:** Устранить баг, при котором агент "Решалы", устанавливаемый через Skynet на новый сервер, не запускался автоматически в интерактивном режиме и вызывал ошибку `TERM environment variable not set`.
+
+- **Проблема:**
+    - При подключении к серверу, где агент отсутствовал, Skynet запускал установку. Установочный скрипт пытался сразу же запустить "Решалу" (`exec`).
+    - Так как эта установка происходила в неинтерактивной SSH-сессии (без `-t`), у сессии отсутствовал TTY, что приводило к ошибке `TERM environment variable not set` и некорректному отображению интерфейса в логах.
+    - Переменная `RESHALA_NO_AUTOSTART=1`, которая должна была предотвратить этот запуск, не передавалась корректно в `sudo` сессию.
+    - Также была обнаружена отсутствующая функция `_skynet_is_local_newer` для сравнения версий.
+
+- **Реализованные исправления:**
+    - **1. Корректная передача переменной:** В `modules/skynet/menu.sh`, команда установки была изменена с `RESHALA_NO_AUTOSTART=1 ...` на `export RESHALA_NO_AUTOSTART=1; ...`. Это гарантирует, что переменная окружения сохраняется даже при выполнении через `sudo bash -c '...'`, и установочный скрипт больше не пытается запустить TUI.
+    - **2. Восстановлена проверка версий:** В `modules/skynet/menu.sh` был подключен модуль `modules/core/self_update.sh` и добавлена недостающая функция-обертка `_skynet_is_local_newer`, что восстановило логику проверки необходимости обновления агента.
+
+**Статус:**
+- Теперь после установки агента неинтерактивная сессия корректно завершается.
+- Скрипт продолжает выполнение и немедленно инициирует **новую, интерактивную** сессию (`ssh -t`), которая, как и положено, автоматически запускает агент "Решалы" на удаленном сервере. Ошибка `TERM` устранена.
+
+### 2025-12-28, Part 4 – Исправление ошибки 'unbound variable' в модуле Шейпера трафика
+**Цель:** Устранить критическую ошибку `unbound variable: C_BLUE`, которая возникала при входе в меню "Шейпер трафика".
+
+- **Проблема:**
+  - При входе в меню `Шейпер трафика` скрипт аварийно завершался с ошибкой `unbound variable: C_BLUE`.
+  - Причина заключалась в том, что модуль `modules/local/traffic_limiter.sh` использовал цветовые переменные (например, `C_BLUE`, `C_GREEN`), но не импортировал файл `modules/core/common.sh`, в котором они определены. Также отсутствовал импорт `modules/core/dependencies.sh` для функции `ensure_package`.
+
+- **Реализованные исправления:**
+  - В файл `modules/local/traffic_limiter.sh` в самое начало были добавлены строки для импорта необходимых зависимостей:
+    ```bash
+source "$SCRIPT_DIR/modules/core/common.sh"
+source "$SCRIPT_DIR/modules/core/dependencies.sh"
+    ```
+
+**Статус:**
+- Ошибка устранена. Модуль "Шейпер трафика" теперь должен открываться и работать корректно.
+
 ### 2025-12-28, Часть 3 – Централизация получения данных о меню
 **Цель:** Устранить баг с отображением `(меню [?])` на дашборде и унифицировать способ получения данных о пунктах меню из других модулей.
 
@@ -481,7 +566,7 @@ Then consult this Agent journal to understand the latest UX and behavior decisio
     - **ACME HTTP-01 (один домен, без wildcard)**.
   - In the new Reshala modules, при установке **ноды** (локально или через Skynet) пользователь будет явно выбирать:
     - `[1]` «Нода будет использовать wildcard-сертификат панели (Cloudflare API)» – допустимо **только если** панель действительно настроена на Cloudflare API / wildcard.
-    - `[2]` «Сгенерировать отдельный сертификат на этой ноде (ACME HTTP-01 или свой Cloudflare)`.
+    - `[2]` «Сгенерировать отдельный сертификат на этой ноде (ACME HTTP-01 или свой Cloudflare)`. 
   - Для варианта `[1]` (Cloudflare/wildcard):
     - На панели будет вестись список нод, которые используют **панельный wildcard** (отдельный файл в `${DIR_REMNAWAVE}` с `user@ip` и путями до cert’ов на ноде).
     - В `renew_hook` Let’s Encrypt на панели (который уже правит `nginx` в доноре) будет добавлен вызов маленького скрипта синхронизации: он через `scp/rsync` копирует обновлённый `fullchain.pem`/`privkey.pem` с панели на каждую ноду из списка и перезапускает nginx/контейнер на ноде.
@@ -873,6 +958,52 @@ When adding new functionality:
 2. Wire any persistent settings through `config/reshala.conf` via `set_config_var`/`get_config_var`.
 3. Use `menu_header` and `info/ok/warn/err` for all new menus and messages.
 4. Update this WARP Agent journal if you change UX, data formats, or cross-cutting behaviours (widgets, Skynet, self-update, etc.).
+
+### 11. Generating Scripts via Heredoc (NEW STANDARD)
+
+When a module generates another shell script (e.g., for a `systemd` service), it is critical to follow these rules to avoid `Exec format error` and `unbound variable` issues.
+
+-   **Escaping is Everything:** Inside a `cat << EOF` block, you must distinguish between evaluation-time and run-time expansion.
+    -   To embed a variable's value **at the time of generation**, use it directly: `local my_value="foo"; echo "$my_value"` will write `foo` into the script.
+    -   To make the generated script use a variable or command **when it runs**, you **MUST** escape the dollar sign: `echo "\$HOSTNAME"` writes the literal `$HOSTNAME` into the script, and `VERSION=\$(uname -r)` writes the literal `$(uname -r)`.
+    -   **NEVER** double-escape (e.g., `\\$`). This was the cause of `Exec format error` in the traffic limiter module.
+
+-   **No `local` in Global Scope:** Do not use the `local` keyword for variables in the main (global) body of a generated script. `local` can only be used inside functions. This error is visible in `systemd` logs.
+
+-   **Respect `set -u`:** Generated scripts, like all scripts in this project, must be robust enough to run under `set -u` (`nounset`).
+    -   Ensure that any variable is defined before it is used.
+    -   Pay special attention to variables defined inside `if` statements. If a variable might be needed in another branch (`else` or after the `if` block), define it **before** the conditional block.
+
+**Example of a robust generated script block:**
+```bash
+# Inside a generator function in a module
+_generate_my_script() {
+    local GENERATION_TIME_VAR="Generated at $(date)"
+
+    cat << EOF
+#!/bin/bash
+set -u
+
+# This was expanded during generation:
+echo "$GENERATION_TIME_VAR"
+
+# These will be evaluated when the script is RUN
+GREETING="Hello"
+WHO=\$USER
+KERNEL_VERSION=\$(uname -r)
+
+echo "\$GREETING, \$WHO! You are on kernel \$KERNEL_VERSION."
+
+# Correctly handling variables for set -u
+MY_VAR="" # Define before conditional
+if [[ -f "/some/file" ]]; then
+    MY_VAR=\$(cat /some/file)
+fi
+echo "My var is: \$MY_VAR" # This is now safe
+
+EOF
+}
+```
 
 ### 2025-12-19 – Agent Onboarding & Codebase Analysis
 

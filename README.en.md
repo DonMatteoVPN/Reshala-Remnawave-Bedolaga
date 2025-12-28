@@ -5,9 +5,11 @@
 
 <a id="en"></a>
 
-# Reshala Tool 🚀 v3.x
+# Reshala Tool 🚀 v2.60
 
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/assets/reshala-logo.jpg)
+
+![Dashboard](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/assets/dashbord.png)
 
 <p align="center">
   <br>
@@ -17,78 +19,96 @@
   <br>
 </p>
 
-### WHAT IS THIS TOOL?
+### 🎯 THE BIG PICTURE
 
-Reshala is a simple console control panel that helps you keep your servers and fleet under control.
+**Reshala** (from Russian "the Solver") is my personal "problem solver" for the world of Linux servers, and I'm sharing it with you. I've been grinding like hell to build this tool and save myself, and you, from the daily grind. This isn't just a script; it's a complete TUI framework for managing a single server or an entire fleet.
 
-It:
-- prepares a server “from zero to ready” (cleans junk, fixes the system, tunes network settings);
-- **secures the server** with a comprehensive security module (Firewall, Fail2Ban, Hardening);
-- shows a clear dashboard with CPU/RAM/disk and channel usage;
-- has a **Skynet** mode to control many servers from a single screen;
-- installs and maintains the **Remnawave panel and its nodes** on one or many servers;
-- supports lightweight widgets and plugins so you can add your own tricks.
-
-The idea is simple: less manual admin work, more time for your business.
+> **The philosophy is simple:** maximum automation, minimum routine. I built this so the server works for you, not the other way around.
 
 ---
 
-### 🎛 DASHBOARD
+### ✨ KEY FEATURES
 
-When you start the script, you get a **control panel**, not a black hole:
-- **Visuals:** CPU / RAM / Disk usage bars.
-- **Honest math:** can run an **official Ookla speedtest** and estimate **how many real users your node can handle**. This calculation also works correctly in agent mode (Skynet).
-- **Status:** kernel version, virtualization, country, ping, and status of main services.
-- **WIDGETS:** small, toggleable widgets below the panel (crypto price, Docker state, network activity), which can be toggled. Output is auto-aligned, and data is cached to minimize load.
+I've spent a ton of time thinking through every aspect of server management and bundling the best practices into convenient modules.
+
+<br>
+
+#### 🌐 Skynet: Become the Master of Your Fleet
+> This is the holy grail and my main source of pride. Forget having 20 SSH windows open. Skynet is your single command center that turns a zoo of servers into an obedient army.
+>
+> -   **💥 Total Control:** Manage dozens of servers like they're one. Add, remove, run commands on all of them at once. You're the boss here.
+> -   **🚀 Teleport:** Instantly jump into any machine on your list. Keys? I'll handle that for you.
+> -   **🤖 Auto-Capture:** Pointed Skynet at a new server without Reshala? Not a problem. It will parachute in, install itself, and report back when it's ready for duty.
+> -   **🛠️ Smart Commands:** This ain't just `uptime`. I've sorted all commands into categories so you can surgically strike at problems: diagnostics, security, system.
+
+<br>
+
+#### 🚦 Traffic Shaper: To Each Their Own
+> My other pride and joy. Enough of the "one-size-fits-all" bullshit where one heavy downloader ruins the connection for everyone else. This shaper is your personal bouncer, giving every single user their own, strictly enforced speed limit.
+>
+> -   **⚖️ Fair Share:** You set the speed limit (e.g., 10 Mbps) **for each user**.
+> -   **😎 Noisy Neighbors No More:** No one will suffer just because someone else decided to download the entire internet. Everyone stays in their own lane and doesn't bother others.
+> -   **🎛️ Simple Controls:** Just go to the menu, set the port and the limits. That's it. No more `tc`, `htb`, or other command-line hell. I did all that for you.
+
+<br>
+
+#### 🎛️ The Informative Dashboard
+*A control panel, not a black screen*
+
+The moment you log in, you're greeted with a complete overview of your server's health:
+- **📊 Visualization:** Clear, concise bars for CPU, RAM, and disk usage.
+- **📈 Performance Estimation:** Runs an official **Ookla Speedtest** and calculates how many real users your node can handle.
+- **🌍 Status Panel:** All key information in one place—from kernel version and virtualization to ping and Remnawave status.
+- **⚙️ Customization:** Enable or disable widgets (crypto prices, Docker status, network activity) and adjust the dashboard's "load profile" to reduce resource consumption on weak VPSs.
+
+<br>
+
+#### 🛡️ Comprehensive Security Module
+*Turning your server into a fortress*
+
+I've gathered a "must-have" toolkit for any public server, all in one place.
+- **🔥 Firewall (UFW):** A user-friendly wizard for setting up rules, with ready-made profiles for standard services.
+- **👀 Fail2Ban:** Automatically blocks attackers based on SSH logs.
+- **🧠 Kernel Hardening (sysctl):** Applies proven security settings at the kernel level to protect against spoofing, smurf attacks, and other threats.
+- **📦 Backups:** Create and restore your security configurations with a single click.
+
+<br>
+
+#### 💿 Remnawave Lifecycle Management
+*Full control over the panel and its nodes*
+
+Reshala is Remnawave's best friend. I've automated everything I could.
+- **🚀 Quick Start:** Install the panel, a node, or both together in a few simple steps.
+- **🌐 Management via Skynet:** Install nodes on remote servers directly from the Reshala interface.
+- **📜 Everything at Hand:** Convenient access to logs, restarts, and installation management.
+
+<br>
+
+#### 🐳 Smart Docker Management
+*Keeping Docker in check*
+
+Docker is a powerful tool, but it loves to eat up disk space. This module solves that problem.
+- **🧹 Deep Clean:** Removes unused images, networks, volumes, and stopped containers with your confirmation.
+- **🎛️ Convenient Menu:** Quick access to logs, stats (`docker stats`), and the ability to start, stop, and restart any container.
 
 ---
 
-### 🌐 [0] SKYNET: FLEET CONTROL
+### 🗺️ ROADMAP
 
-No more SSHing into each server by hand.
-*   **Single control plane:** Add all your servers to the database and manage them from one place.
-*   **Teleport:** Instantly connect to any server. The script manages keys for you.
-*   **Auto-capture:** If a remote server doesn't have Reshala, Skynet can install it automatically.
-*   **Categorized Commands:** Execute commands across your entire fleet by choosing from a convenient, categorized menu (diagnostics, system, security, etc.).
+I'm constantly working on the project. Here's what I plan to implement in the near future:
 
----
-
-### 📂 MENU OVERVIEW
-
-#### [1] 🔧 MAINTENANCE
-Everything that keeps the server stable and responsive.
-*   **System Heal & Update:** Helps revive older Ubuntu versions, gently fixing repositories and packages.
-*   **Network Boost:** Applies a ready-made set of BBR tweaks for better speed in a few steps.
-*   **Channel Check:** Measures real bandwidth and roughly estimates how many users this server can handle.
-
-#### [2] 📜 DIAGNOSTICS
-Stop typing `docker logs -f ...` by hand.
-*   Quick access to logs for Reshala itself, the Remnawave panel, the node (Xray), or the Bot.
-*   Instant problem diagnosis with a clean exit via `CTRL+C`.
-
-#### [3] 🐳 DOCKER MANAGEMENT
-Docker loves to eat disk space. This section keeps it in check.
-*   Shows containers, images, volumes, and networks.
-*   Prunes garbage (cache, old containers, dangling volumes) with a single command and confirmation.
-*   Provides handy menus for starting, stopping, restarting, viewing logs, and inspecting containers.
-
-#### [4] 💿 REMNAWAVE: INSTALL & CONTROL
-This section groups all Remnawave workflows.
-- **Panel only** – installs the Remnawave panel, creates an admin, and can immediately enable HTTPS.
-- **Panel + node** – sets up the panel and the first node on the same server.
-- **Node installation wizard** – installs nodes on this server, on one remote server (via Skynet), or on several at once.
-- **Manage installation** – restart, view logs, and review key information.
-
-#### [s] 🛡️ SECURITY
-A comprehensive module for basic server hardening.
-*   **Security Status:** an overall summary of all protection components.
-*   **Firewall (UFW):** a wizard for configuring rules, with ready-made profiles for nodes.
-*   **Fail2Ban:** automatically blocks attackers based on SSH logs.
-*   **Kernel Hardening (sysctl):** applies proven security settings at the kernel level.
-*   **Backups:** create and restore security configurations.
-
-#### [t] 🤖 TG NOTIFICATIONS
-A module for Telegram integration. Currently under development.
+- **[ ] 💿 Remnawave Panel:** Installation, configuration, and management.
+- **[ ] 🤖 Bedolaga TG Bot:** Installation and configuration.
+- **[ ] 🚀 Full Telegram Integration:**
+  - Manage servers and your fleet via commands in a Telegram bot.
+  - Receive notifications about critical events (high load, Fail2Ban attacks, low disk space).
+  - Request the status of any server in the fleet with a single command.
+- **[ ] 🌐 Web Interface (Long-Term Goal):**
+  - A lightweight web panel for visually monitoring the Skynet fleet.
+- **[ ] 🔔 Advanced Monitoring and Alerting:**
+  - Configure thresholds for CPU, RAM, and disk usage to automatically send notifications.
+- **[ ] 🛡️ Enhanced Security Scenarios:**
+  - Automated incident response (e.g., blocking IPs that initiate scanning attempts).
 
 ---
 
@@ -127,11 +147,11 @@ rm -f /usr/local/bin/reshala && rm -rf /opt/reshala && rm -f install.sh
 
 ## 🧩 IF YOU WANT TO HACK ON THE CODE
 
-This README is for users. If you are a developer who wants to extend Reshala, start with these documents:
+This README is for users. If you are a developer who wants to extend Reshala, start with these documents. The project has recently been updated to a modern **"Menu Manifest" architecture**, which makes adding new features simple and fast.
 
 - **`docs/STYLE_GUIDE.md`** — **(Must Read!)** The single source of truth for coding style, UI conventions, and using internal helpers.
-- `WARP.md` — The development journal and a high-level architecture overview.
 - `docs/GUIDE_MODULES.md` – How to write new modules and integrate them into the menu.
+- `WARP.md` — The development journal and a high-level architecture overview.
 - `docs/GUIDE_SKYNET_WIDGETS.md` – How to build your own widgets and Skynet commands.
 
 **The key rule:** before writing any code, you must study **`docs/STYLE_GUIDE.md`**.
@@ -140,8 +160,15 @@ This README is for users. If you are a developer who wants to extend Reshala, st
 
 ## 🥃 FINAL WORD
 
-This tool was built so you can focus on your business, not on admin work. See a bug? Report it. Like a feature? Use it.
+I built this tool so you can focus on your business, not on admin work. See a bug? Report it. Like a feature? Use it.
 
 **Good luck and stable profit.** 👊
 
-### [💰 Small tip to support the author (for beer & nerves)](https://t.me/tribute/app?startapp=dxrn)
+### IF YOU USE IT AND DON'T STAR IT, YOU'RE A 🐓
+### Support the project 💸 (for beer & nerves):
+
+#### Cryptocurrency:
+- **USDT (TRC20):** `TKPnnmtJcDM7B2uCoLQciwZmS7f8ckMNx9` 💎
+- **Bitcoin (BTC):** `bc1q235adg3dd4t43jmkpqka0hj305la43md38fc0n` ₿
+
+[💰 Donate via Telegram](https://t.me/tribute/app?startapp=dxrn)

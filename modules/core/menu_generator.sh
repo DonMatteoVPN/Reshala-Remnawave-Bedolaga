@@ -166,6 +166,12 @@ render_menu_items() {
         local item_id="${sorted_id#*:*:}"
         
         local key="${_MENU_ITEMS_KEY[$item_id]}"
+        
+        # Фильтр для режима агента: не показывать управление флотом внутри агента
+        if [[ "${SKYNET_MODE:-0}" -eq 1 && "$key" == "0" && "$parent_id" == "main" ]]; then
+            continue
+        fi
+
         local title="${_MENU_ITEMS_TITLE[$item_id]}"
         local desc="${_MENU_ITEMS_DESC[$item_id]}"
         local current_group_id="${_MENU_ITEMS_GROUP[$item_id]}"

@@ -35,6 +35,12 @@
 source "${SCRIPT_DIR}/modules/skynet/keys.sh"
 source "${SCRIPT_DIR}/modules/skynet/db.sh"
 source "${SCRIPT_DIR}/modules/skynet/executor.sh"
+source "${SCRIPT_DIR}/modules/core/self_update.sh"
+
+_skynet_is_local_newer() {
+    # Возвращает 0, если локальная версия ($1) новее удаленной ($2)
+    _self_update_is_remote_newer "$2" "$1"
+}
 
 # ============================================================ #
 #                ДЕЙСТВИЯ МЕНЮ SKYNET                          #
@@ -276,6 +282,21 @@ _show_server_management_menu() {
         clear
         printf_info "🚀 SKYNET UPLINK: Подключаюсь к ${s_name}..."
 
+        # Проверяем, работает ли вход по ключу. Если нет - предлагаем закинуть ключ.
+        if ! ssh -q -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "${s_user}@${s_ip}" exit; then
+            printf_warning "Не удалось войти по ключу. Возможно, сервер был переустановлен."
+            if ask_yes_no "Хочешь закинуть ключ на сервер сейчас (потребуется пароль)?"; then
+                if ! ssh-copy-id -o StrictHostKeyChecking=no -i "${s_key}.pub" -p "$s_port" "${s_user}@${s_ip}"; then
+                    err "Не удалось установить ключ. Проверь пароль или доступность SSH."
+                    wait_for_enter
+                    return
+                fi
+                ok "Ключ успешно установлен!"
+            else
+                info "Отмена. Дальнейшие операции могут потребовать пароль."
+            fi
+        fi
+
         if [[ "$s_user" != "root" && -z "$s_pass" ]]; then
             s_pass=$(ask_password "Введи пароль для '$s_user': ")
             if [[ -n "$s_pass" ]] && ask_yes_no "Сохранить пароль в базу?" "n"; then
@@ -300,22 +321,24 @@ _show_server_management_menu() {
 
         if [[ -z "$remote_ver" ]] || _skynet_is_local_newer "$VERSION" "$remote_ver"; then
             warn "Требуется установка/обновление агента..."
-            local install_cmd="RESHALA_NO_AUTOSTART=1 wget -qO /tmp/i.sh ${INSTALLER_URL_RAW} && bash /tmp/i.sh"
+            # Экспортируем переменную, чтобы она была доступна для `bash /tmp/i.sh` даже внутри `sudo bash -c '...'`
+            local install_cmd="export RESHALA_NO_AUTOSTART=1; wget -qO /tmp/i.sh ${INSTALLER_URL_RAW} && bash /tmp/i.sh"
             if ! run_remote "$install_cmd"; then err "Не удалось развернуть агента."; wait_for_enter; return; fi
             ok "Агент развёрнут."
         else
-            ok "OK (${remote_ver})"
+            ok "Агент готов: (${remote_ver})"
         fi
         
         printf_info "Вхожу в удалённый терминал..."
         local ssh_opts=(-t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port")
         local remote_target="${s_user}@${s_ip}"
-        local remote_exec_command="SKYNET_MODE=1 ${INSTALL_PATH}"
+        # Исполняем команду через 'bash -l -c' и по абсолютному пути, чтобы гарантировать корректный $PATH
+        local remote_exec_command="bash -l -c 'SKYNET_MODE=1 /opt/reshala/reshala.sh'"
 
         if [[ "$s_user" == "root" ]]; then
             ssh "${ssh_opts[@]}" "$remote_target" "$remote_exec_command"
         else
-            local sudo_wrapper_command="echo '$s_pass' | sudo -S -p '' bash -c \"$remote_exec_command\""
+            local sudo_wrapper_command="echo '$s_pass' | sudo -S -p '' ${remote_exec_command}"
             ssh "${ssh_opts[@]}" "$remote_target" "$sudo_wrapper_command"
         fi
         
