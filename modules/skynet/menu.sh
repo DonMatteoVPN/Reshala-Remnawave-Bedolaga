@@ -203,6 +203,8 @@ show_fleet_menu() {
                 if [[ ! -f "$tmp_dir/$i" ]]; then
                     echo "..." > "$tmp_dir/$i"
                     IFS='|' read -r _ user ip port key _ <<< "$line"
+                    # Лечим ключ хоста перед проверкой
+                    _skynet_heal_host_key "$ip" "$port"
                     # Запускаем в фоне и сохраняем PID
                     ( timeout 3 ssh -n -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$key" -p "$port" "$user@$ip" exit &>/dev/null && echo "ON" > "$tmp_dir/$i" || echo "OFF" > "$tmp_dir/$i" ) &
                     pids+=($!)
@@ -268,6 +270,9 @@ _show_server_management_menu() {
     local s_name s_user s_ip s_port s_key s_pass; IFS='|' read -r s_name s_user s_ip s_port s_key s_pass <<< "$server_data"
     
     _sm_connect() {
+        # Лечим ключ хоста на случай, если он изменился
+        _skynet_heal_host_key "$s_ip" "$s_port"
+        
         clear
         printf_info "🚀 SKYNET UPLINK: Подключаюсь к ${s_name}..."
 
