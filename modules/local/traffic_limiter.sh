@@ -676,7 +676,7 @@ for conf_file in "${conf_files[@]}"; do
         
         # Дочерний класс
         run_tc tc class add dev "$IFACE" parent "1:$(printf %x $DL_PARENT_MINOR)" \
-            classid "$CLASS_ID" htb rate "$DOWN_LIMIT" ceil "20mbit" burst 15k quantum 1500
+            classid "$CLASS_ID" htb rate "$DOWN_LIMIT" ceil "$DOWN_LIMIT" quantum 1500
         
         # SFQ
         run_tc tc qdisc add dev "$IFACE" parent "$CLASS_ID" sfq perturb 10
