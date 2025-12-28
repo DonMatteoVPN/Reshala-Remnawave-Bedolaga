@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # TITLE: (Название плагина)
-# SKYNET_HIDDEN: false
+# SKYNET_HIDDEN: true
 #
 # Описание того, что делает этот плагин.
 #
