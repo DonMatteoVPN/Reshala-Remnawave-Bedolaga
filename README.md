@@ -1,44 +1,3 @@
-<<<<<<< HEAD
-# Инструмент «Решала» 🚀 v1.999
-
-![Лого Решалы](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
-![Дашборд](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/assets/dashbord.png)
-
-# РЕШАЛА v2.5 ALPHA — ТОЛЬКО ДЛЯ DEV-TESTERS! ⚠️
-
-  Забудь все, что ты видел. main ветка — это прошлое. Вся движуха, мощь и будущее проекта теперь кипит в ветке dev.
-
-  Я выкатываю альфу v2.5 Skynet Framework.
-
-  ВАЖНО: Ветка main больше не обновляется и содержит старый, монолитный код. Если хочешь быть в теме и управлять будущим — твой путь лежит пока в dev.
-
-  ## 🔥 ЧТО ВНУТРИ АЛЬФЫ:
-
-   🌐 ЕДИНЫЙ ФЛОТ (SKYNET): Управляй всеми своими серверами из одного окна. Скрипт сам себя установит на новые машины и прокинет SSH-ключи.
-   
-   🧩 ПОЛНАЯ МОДУЛЬНОСТЬ: Конструктор LEGO для админов. Вся логика разбита на чистые, расширяемые модули.
-   
-   🔌 ПЛАГИНЫ И ВИДЖЕТЫ: Пиши собственные команды для флота и виджеты для дашборда.
-
- ### 👇 ИНСТРУКЦИЯ ПО ПЕРЕХОДУ НА v2.5 ALPHA
-
-  ШАГ 1: ПОЛНОСТЬЮ УДАЛИ СТАРУЮ ВЕРСИЮ!
-  Без этого ничего не заработает. Выбери один из способов:
-
-   Способ 1: Запусти старый скрипт reshala и найди в меню пункт удаления.
-   Способ 2 (Надежный): Просто выполни команду:
-
-```shell
-rm -f /usr/local/bin/reshala && rm -rf /opt/reshala && rm -f install.sh
-```
-
-
-  ### ШАГ 2: УСТАНОВИ DEV-ВЕРСИЮ
-  Копируй и вставляй:
-
-```shell
- wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/dev/install.sh \
-=======
 <p align="right">
   <a href="README.md"><img src="https://cdn.jsdelivr.net/gh/hampusborgos/country-flags@main/svg/ru.svg" alt="RU" width="20" /> RU</a> |
   <a href="README.en.md"><img src="https://cdn.jsdelivr.net/gh/hampusborgos/country-flags@main/svg/us.svg" alt="EN" width="20" /> EN</a>
@@ -49,8 +8,6 @@ rm -f /usr/local/bin/reshala && rm -rf /opt/reshala && rm -f install.sh
 # Инструмент «Решала» 🚀 v2.60
 
 ![Лого Решалы](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/assets/reshala-logo.jpg)
-![Дашборд](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/assets/dashbord.png)
-
 ![Дашборд](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/assets/dashbord.png)
 
 <p align="center">
@@ -161,24 +118,10 @@ Docker — мощный инструмент, но он любит пожира�
 ### Стабильная ветка (main):
 ```bash
 wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/install.sh \
->>>>>>> dev
   && bash install.sh \
   && reshala
 ```
 
-<<<<<<< HEAD
-
-  ### ШАГ 3: ЗАПУСК
-  Перезайди на сервер и выполни reshala. Добро пожаловать в будущее.
-
-  ---
-
-  Это альфа. Ломай, тестируй, сообщай о багах в Issues на GitHub. Обратной дороги не будет идем только в перед!.
-
- ### [💰 Донатик на поддержку автору (на пиво и нервы)](https://t.me/tribute/app?startapp=dxrn)
-
-  Начни управлять. 👊
-=======
 ### Ветка разработчика (dev) — тестовая версия 
 ⚠️ **НЕ ДЛЯ ПРОДАКШЕНА**:
 ```bash
@@ -230,4 +173,3 @@ rm -f /usr/local/bin/reshala && rm -rf /opt/reshala && rm -f install.sh
 
 [💰 Донатик через Telegram](https://t.me/tribute/app?startapp=dxrn)
 
->>>>>>> dev
