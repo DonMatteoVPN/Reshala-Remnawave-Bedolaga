@@ -32,7 +32,6 @@
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 1 # Защита от прямого запуска
 
-
 # Подключаем ядро и зависимости
 source "$SCRIPT_DIR/modules/core/common.sh"
 source "$SCRIPT_DIR/modules/core/dependencies.sh"
