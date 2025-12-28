@@ -93,8 +93,27 @@ run_module() {
     fi
 }
 
+# Режим Агента (только дашборд)
+show_agent_view() {
+    trap 'exit 0' SIGINT
+    run_module ui/dashboard show
+    printf "\n%s\n" "Вы в режиме агента. Нажмите [q] для выхода."
+    
+    while true; do
+        local key
+        read -r -s -n 1 key
+        if [[ "$key" == "q" || "$key" == "Q" ]]; then
+            break
+        fi
+    done
+    exit 0
+}
+
 # Главное меню
 show_main_menu() {
+    # Перехватываем Ctrl+C только в главном меню, чтобы вывести сообщение
+    trap 'printf "\n%b\n" "Для выхода из Решалы используй [q]." >&2' SIGINT
+
     while true; do
         run_module ui/dashboard show
         
@@ -115,6 +134,7 @@ show_main_menu() {
         fi
         
         if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
+            # Этот код больше не будет выполняться, т.к. show_main_menu не вызывается в SKYNET_MODE
             printf_menu_option "q" "🔙 ВЕРНУТЬСЯ В ЦУП" "${C_CYAN}"
         else
             printf_menu_option "q" "🚪 Выйти из решалы" "${C_CYAN}"
@@ -153,12 +173,9 @@ show_main_menu() {
                     fi
                     ;;
                 q|Q)
-                    if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
-                        exit 0
-                    else
-                        echo "Был рад помочь. Не обосрись. 🥃"
-                        exit 0
-                    fi
+                    # В режиме SKYNET_MODE эта ветка не будет достигнута
+                    echo "Был рад помочь. Не обосрись. 🥃"
+                    exit 0
                     ;;
                 *)
                     printf_error "Нет такого пункта."
@@ -185,12 +202,14 @@ main() {
         exit 0
     fi
 
-    # Перехватываем Ctrl+C только в главном меню, чтобы вывести сообщение
-    trap 'printf "\n%b\n" "Для выхода из Решалы используй [q]." >&2' SIGINT
-
     log "Запуск фреймворка Решала ${VERSION}"
     run_module core/self_update check_for_updates
-    show_main_menu
+
+    if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
+        show_agent_view
+    else
+        show_main_menu
+    fi
 }
 
 main "$@"
