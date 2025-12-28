@@ -525,13 +525,23 @@ log "🚀 Запуск Reshala Traffic Limiter (U32 Hash Mode)..."
 
 # === ПРОВЕРКА ДОСТУПНОСТИ HTB ===
 if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
-    log "⚠️ Модуль sch_htb недоступен, пытаюсь установить..."
+    KERNEL_VERSION=$(uname -r)
+    log "⚠️ Модуль sch_htb недоступен на ядре: $KERNEL_VERSION"
+    log "Пытаюсь установить модули..."
     
-    # Попытка установки модулей
-    if command -v apt &>/dev/null; then
-        apt update &>/dev/null && apt install -y linux-modules-extra-$(uname -r) &>/dev/null
-    elif command -v yum &>/dev/null; then
-        yum install -y kernel-modules-extra &>/dev/null
+    # Определение дистрибутива
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+        if [[ "$ID" == "debian" ]]; then
+            log "Обнаружен Debian. Устанавливаю модули..."
+            apt update &>/dev/null
+            apt install -y linux-image-$(uname -r) &>/dev/null || \
+            apt install -y linux-image-amd64 &>/dev/null
+        elif [[ "$ID" == "ubuntu" ]]; then
+            log "Обнаружен Ubuntu. Устанавливаю модули..."
+            apt update &>/dev/null
+            apt install -y linux-modules-extra-$(uname -r) &>/dev/null
+        fi
     fi
     
     # Попытка загрузки
@@ -539,11 +549,27 @@ if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
     
     # Финальная проверка
     if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
-        log "❌ ОШИБКА: HTB недоступен после установки!"
-        log "Решение:"
-        log "  1. Установи полное ядро: apt install linux-generic"
+        log "❌ ОШИБКА: HTB недоступен!"
+        log ""
+        log "Текущее ядро: $KERNEL_VERSION"
+        
+        # Проверка конфигурации ядра
+        if zcat /proc/config.gz 2>/dev/null | grep -q "CONFIG_NET_SCH_HTB is not set"; then
+            log "Причина: HTB выключен в конфигурации ядра"
+        elif [[ ! -d "/lib/modules/$KERNEL_VERSION/kernel/net/sched" ]]; then
+            log "Причина: Модули TC отсутствуют для этого ядра"
+        fi
+        
+        log ""
+        log "РЕШЕНИЕ для Debian:"
+        log "  1. Установи стандартное ядро:"
+        log "     apt update && apt install -y linux-image-amd64"
         log "  2. Перезагрузись: reboot"
-        log "  3. Запусти скрипт снова"
+        log "  3. Выбери новое ядро в GRUB"
+        log "  4. Запусти сервис снова"
+        log ""
+        log "Если используешь кастомное ядро (BBR3):"
+        log "  - Пересобери с CONFIG_NET_SCH_HTB=m"
         exit 1
     fi
 fi
