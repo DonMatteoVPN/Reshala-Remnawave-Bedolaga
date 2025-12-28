@@ -1050,8 +1050,8 @@ run_tc() {
 
 # === HELPER: ГЕНЕРАЦИЯ HTB ПАРАМЕТРОВ ===
 generate_htb_params() {
-    local direction="\${1:-}"   # ← ИСПРАВЛЕНИЕ!
-    local rate="\${2:-}"        # ← ИСПРАВЛЕНИЕ!
+    local direction="\${1:-}"
+    local rate="\${2:-}"
     
     local params="htb rate \$rate"
     
@@ -1083,8 +1083,9 @@ log "🚀 Запуск Reshala Traffic Limiter (U32 Hash Mode)..."
 
 # === ПРОВЕРКА ДОСТУПНОСТИ HTB ===
 if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
-    KERNEL_VERSION=$(uname -r)
-    log "⚠️ Модуль sch_htb недоступен на ядре: $KERNEL_VERSION"
+    local KERNEL_VERSION
+    KERNEL_VERSION=\$(uname -r)
+    log "⚠️ Модуль sch_htb недоступен на ядре: \$KERNEL_VERSION"
     log "Пытаюсь установить модули..."
     
     if [[ -f /etc/os-release ]]; then
