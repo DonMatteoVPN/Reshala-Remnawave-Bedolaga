@@ -1,6 +1,7 @@
 # Инструмент «Решала» 🚀 v1.999
 
 ![Лого Решалы](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
+![Дашборд](https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/assets/dashbord.png)
 
 # РЕШАЛА v2.5 ALPHA — ТОЛЬКО ДЛЯ DEV-TESTERS! ⚠️
 
