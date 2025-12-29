@@ -79,7 +79,7 @@ if [[ -z "${TL_CONFIG_DIR:-}" ]]; then
     # Версия модуля (отображается в UI)
     # Увеличивай при глобальных изменениях интерфейса
     
-    readonly TL_CONFIG_VERSION="2"
+    readonly TL_CONFIG_VERSION="3"
     # ⚠️ ВАЖНО: Увеличивай эту версию при изменении параметров TC!
     # Пример: Если меняешь TL_DL_BURST="15k" на "20k" — увеличь до "3"
     # Система автоматически предложит обновить старые конфиги
@@ -99,7 +99,7 @@ if [[ -z "${TL_CONFIG_DIR:-}" ]]; then
     # ФОРМУЛА strict: htb rate 5mbit ceil 5mbit  → максимум 5 Mbit/s
     # ФОРМУЛА flexible: htb rate 5mbit ceil 20mbit → может взять до 20 Mbit/s если канал пустой
     
-    readonly TL_DL_BURST="20k"
+    readonly TL_DL_BURST="40k"
     # Размер burst (короткий всплеск на уровне rate)
     # НАЗНАЧЕНИЕ: Уменьшает latency для мелких пакетов (DNS, ping, первые TCP segments)
     # РАСЧЁТ: rate / HZ * 2, где HZ = частота ядра (обычно 250 или 1000)
@@ -124,7 +124,7 @@ if [[ -z "${TL_CONFIG_DIR:-}" ]]; then
     # 
     # ⚠️ НЕ ИСПОЛЬЗУЙ cburst в strict режиме (rate = ceil) — бесполезно!
     
-    readonly TL_DL_QUANTUM="1500"
+    readonly TL_DL_QUANTUM=""
     # Quantum = количество байт, отправляемых за один "time slice"
     # РЕКОМЕНДАЦИЯ: 1500 байт = MTU Ethernet (размер одного пакета)
     # АЛЬТЕРНАТИВЫ:
@@ -141,7 +141,7 @@ if [[ -z "${TL_CONFIG_DIR:-}" ]]; then
     readonly TL_UL_RATE_MODE="strict"
     # Аналогично TL_DL_RATE_MODE (см. выше)
     
-    readonly TL_UL_BURST=""
+    readonly TL_UL_BURST="10k"
     # Upload burst — обычно НЕ НУЖЕН для исходящего трафика
     # ПОЧЕМУ: Upload имеет более равномерный характер (ACK пакеты, небольшие запросы)
     # КОГДА ИСПОЛЬЗОВАТЬ: Если пользователи загружают большие файлы
@@ -153,7 +153,7 @@ if [[ -z "${TL_CONFIG_DIR:-}" ]]; then
     readonly TL_UL_CBURST=""
     # Upload cburst (аналогично TL_DL_CBURST)
     
-    readonly TL_UL_QUANTUM="1500"
+    readonly TL_UL_QUANTUM=""
     # Аналогично TL_DL_QUANTUM
     
     
@@ -218,11 +218,11 @@ if [[ -z "${TL_CONFIG_DIR:-}" ]]; then
     # │  Значения по умолчанию в визарде создания правил        │
     # └─────────────────────────────────────────────────────────┘
     
-    readonly TL_DEFAULT_DOWN_RATE="4"
+    readonly TL_DEFAULT_DOWN_RATE="5"
     # Дефолтный лимит СКАЧИВАНИЯ (Мбит/с) при создании нового порта
     # Пользователь может изменить это значение в визарде
     
-    readonly TL_DEFAULT_UP_RATE="4"
+    readonly TL_DEFAULT_UP_RATE="5"
     # Дефолтный лимит ЗАГРУЗКИ (Мбит/с)
     
     readonly TL_DEFAULT_TOTAL_LIMIT="10000mbit"
