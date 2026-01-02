@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Чат поддержки в Telegram
+    url: https://t.me/ТВОЯ_ССЫЛКА_НА_ЧАТ
+    about: Оперативные вопросы лучше решать в чате с братвой.
+  - name: 📚 Документация (Wiki)
+    url: https://github.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/blob/dev/docs/
+    about: Сначала читай мануал, потом пиши тикет.
