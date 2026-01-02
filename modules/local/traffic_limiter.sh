@@ -1196,11 +1196,11 @@ for conf_file in "\${conf_files[@]}"; do
     MAX_USERS="\${MAX_USERS:-256}"
     
     DL_PARENT_MINOR=\$((0x10 * PORT_IDX))
-    DL_BUCKET_BASE=\$((0x1000 * PORT_IDX))
+    DL_BUCKET_BASE=\$((0x200 * PORT_IDX))
     DL_HASH_HANDLE=\$(printf "%x" \$((0x100 + PORT_IDX)))
     
     UL_PARENT_MINOR=\$((0x20 * PORT_IDX))
-    UL_BUCKET_BASE=\$((0x2000 * PORT_IDX))
+    UL_BUCKET_BASE=\$((0x200 * PORT_IDX))
     UL_HASH_HANDLE=\$(printf "%x" \$((0x200 + PORT_IDX)))
     
     log "🔌 Порт \$PORT на \$IFACE (Idx:\$PORT_IDX)"
