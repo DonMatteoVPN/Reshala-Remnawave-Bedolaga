@@ -135,7 +135,7 @@ Docker — мощный инструмент, но он любит пожира�
   
 ### Стабильная ветка (main):
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/install.sh \
+wget -4 -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/install.sh \
   && bash install.sh \
   && reshala
 ```
@@ -145,7 +145,7 @@ wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnaw
 ### Ветка разработчика (dev) — тестовая версия 
 ⚠️ **НЕ ДЛЯ ПРОДАКШЕНА**:
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/dev/install.sh \
+wget -4 -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/dev/install.sh \
   && bash install.sh \
   && reshala
 ```
