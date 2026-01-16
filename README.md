@@ -192,7 +192,10 @@ rm -f /usr/local/bin/reshala && rm -rf /opt/reshala && rm -f install.sh
 Просто скопируй эту строку в терминал и нажми Enter. Скрипт сам скачается, выдаст права, создаст алиас и запустится.
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/don_remna_up.sh)
+wget -q -O /root/don_remna_up.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/don_remna_up.sh \
+&& sed -i 's/\r$//' /root/don_remna_up.sh \
+&& chmod +x /root/don_remna_up.sh \
+&& bash /root/don_remna_up.sh
 ```
 ### 🎮 КАК ПОЛЬЗОВАТЬСЯ
 
