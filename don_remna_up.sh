@@ -4,7 +4,7 @@ cat > /root/don_remna_up.sh << 'ENDOFFILE'
 # ==========================================
 #  DON MATTEO SYSTEM UPGRADER
 #  Code: LETHAL | Style: GANGSTA | Status: GOD MODE
-#  Edition: ANTI-WINDOWS FIX (v1.6)
+#  Edition: TTY INPUT FIX (v1.8)
 # ==========================================
 
 # Цветовая палитра
@@ -69,16 +69,19 @@ if [ "$CURRENT_EXEC" != "$INSTALL_PATH" ]; then
         echo -e "${RED}❌ Не смог скачать скрипт. Гитхаб лежит или инета нет.${NC}"
         if [ ! -f "$INSTALL_PATH" ]; then exit 1; fi
     else
-        # === ЛЕЧЕНИЕ ОТ WINDOWS (CRLF) ===
+        # ЛЕЧЕНИЕ ОТ WINDOWS
         sed -i 's/\r$//' "$INSTALL_PATH"
-        # ================================
         
         chmod +x "$INSTALL_PATH"
         ln -sf "$INSTALL_PATH" "$LINK_PATH"
         echo -e "${GREEN}✅ Установлено в $INSTALL_PATH${NC}"
         echo -e "${CYAN}🔄 Перезапускаюсь...${NC}"
         sleep 1
-        exec bash "$INSTALL_PATH"
+        
+        # === ВОТ ОНО, ИСПРАВЛЕНИЕ ===
+        # Запускаем установленный скрипт, принудительно отдавая ему клавиатуру (tty)
+        # Это решает проблему вылета при запуске через curl/wget
+        exec bash "$INSTALL_PATH" < /dev/tty
         exit 0
     fi
 fi
@@ -97,12 +100,11 @@ if [ "$CURRENT_LINK_TARGET" != "$INSTALL_PATH" ]; then
     echo -e "${GREEN}######################################################${NC}"
     echo ""
     echo -e "${YELLOW}Слушай сюда. Теперь я тут главный по обновам.${NC}"
-    echo -e "${YELLOW}В следующий раз не мучай wget, просто пиши:${NC}"
-    echo ""
-    echo -e "           👉  ${MAGENTA}donup${NC}  👈"
+    echo -e "${YELLOW}В следующий раз пиши: ${MAGENTA}donup${NC}"
     echo ""
     echo -e "Жми ${GREEN}[ENTER]${NC}, погнали работать..."
-    read
+    # Читаем именно с tty, чтобы не зависеть от пайпов
+    read < /dev/tty
 fi
 
 # ========== РАЗВЕДКА БОЕМ (PRE-SCAN v3.0) ==========
@@ -115,7 +117,6 @@ COMPOSE_NAME_FOR_SHOW="нет файла"
 if [ -n "$DETECTED_COMPOSE" ]; then
     COMPOSE_NAME_FOR_SHOW=$(basename "$DETECTED_COMPOSE")
     
-    # Ищем маркеры в файле
     if grep -q "image:.*backend" "$DETECTED_COMPOSE" || grep -q "image:.*remnawave/panel" "$DETECTED_COMPOSE"; then
         SERVER_TYPE="PANEL"
         SERVER_LABEL="👑 ПАХАН (PANEL)"
@@ -141,7 +142,7 @@ print_header() {
     clear
     echo -e "${MAGENTA}######################################################"
     echo -e "#                                                    #"
-    echo -e "#          💣 DON MATTEO UPGRADER v1.6 💣            #"
+    echo -e "#          💣 DON MATTEO UPGRADER v1.8 💣            #"
     echo -e "#            Инструмент для четких админов           #"
     echo -e "#       Косяков не прощаем. Работаем по красоте.     #"
     echo -e "#                                                    #"
@@ -232,7 +233,9 @@ confirm_execution() {
 
     local needs_cleanup=false
     while true; do
-        read -n 1 -r -s REPLY
+        # Читаем с TTY, чтобы гарантированно получить ввод пользователя
+        read -n 1 -r -s REPLY < /dev/tty
+        
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             echo ""
             echo -e "${GREEN}Во, наш человек. Наводим суету! 🚀${NC}"
