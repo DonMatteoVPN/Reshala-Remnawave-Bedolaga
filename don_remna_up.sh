@@ -4,7 +4,7 @@ cat > /root/don_remna_up.sh << 'ENDOFFILE'
 # ==========================================
 #  DON MATTEO SYSTEM UPGRADER
 #  Code: LETHAL | Style: GANGSTA | Status: GOD MODE
-#  Edition: IDENTITY CRISIS FIX (v1.4)
+#  Edition: IDENTITY CRISIS FIX (v1.5)
 # ==========================================
 
 # Цветовая палитра
