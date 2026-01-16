@@ -203,6 +203,18 @@ wget -4 -O /root/don_remna_up.sh https://raw.githubusercontent.com/DonMatteoVPN/
 ```bash
 donup
 ```
+Удалить и очистить все.
+```bash
+# Сносим симлинк (команду donup)
+rm -f /usr/local/bin/donup
+
+# Сносим сам файл скрипта
+rm -f /root/don_remna_up.sh
+
+# Чистим старые хвосты, если были
+rm -f /root/don_remna.sh
+```
+
 </details>
 
 ---
