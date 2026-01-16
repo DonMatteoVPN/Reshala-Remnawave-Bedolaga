@@ -4,7 +4,7 @@ cat > /root/don_remna_up.sh << 'ENDOFFILE'
 # ==========================================
 #  DON MATTEO SYSTEM UPGRADER
 #  Code: LETHAL | Style: GANGSTA | Status: GOD MODE
-#  Edition: TTY INPUT FIX (v1.8)
+#  Edition: IDENTITY CRISIS FIX (v1.4)
 # ==========================================
 
 # Цветовая палитра
@@ -16,23 +16,50 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
-# Ссылка на RAW версию
-UPDATE_URL="https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/main/don_remna_up.sh"
-# Жесткий путь установки
-INSTALL_PATH="/root/don_remna_up.sh"
-# Симлинк
-LINK_PATH="/usr/local/bin/donup"
+# ==================================================================================
+# 🕵️  ИЩЕЙКА (AUTO-DISCOVERY ZONE)  🕵️
+# ==================================================================================
+# Сюда не лезь. Скрипт сам найдет, куда ты спрятал файлы.
+
+echo -e "${BLUE}🔍 Начинаю шмон по системе... Ищем твои контейнеры...${NC}"
+
+# Функция поиска docker-compose
+find_core_path() {
+    # 1. Проверяем дефолт (для ленивых)
+    if [ -f "/opt/remnawave/docker-compose.yml" ]; then
+        echo "/opt/remnawave"
+        return
+    fi
+    
+    # 2. Если ты "творческая личность", ищем в /opt и /root (глубина 4)
+    # Ищем файл, в котором упоминается образ remnawave (node или backend)
+    local FOUND=$(find /opt /root -maxdepth 4 -name "docker-compose.y*ml" -print0 2>/dev/null | xargs -0 grep -lE "image:.*remnawave/(node|backend)" | head -n 1)
+    
+    if [ -n "$FOUND" ]; then
+        dirname "$FOUND"
+    else
+        echo "NOT_FOUND"
+    fi
+}
+
+CORE_PATH=$(find_core_path)
+
+if [ "$CORE_PATH" == "NOT_FOUND" ]; then
+    echo -e "${RED}🤬 Слыш, я перерыл /opt и /root, но не нашел ни Панели, ни Ноды!${NC}"
+    echo -e "${YELLOW}Либо ты назвал папку как-то совсем криво, либо у тебя вообще ничего не стоит.${NC}"
+    echo -e "Укажи путь руками в скрипте, если ты такой уникальный."
+    exit 1
+fi
+
+echo -e "${GREEN}🎯 Опа, нашел логово тут: ${CYAN}$CORE_PATH${NC}"
 
 # ==================================================================================
-# ⚙️  ЗОНА ДЛЯ РОВНЫХ ПАЦАНОВ (CONFIG ZONE)  ⚙️
+# ⚙️  ЗОНА КОНФИГА (ДИНАМИЧЕСКАЯ)  ⚙️
 # ==================================================================================
 
-# 1. Где лежит ГЛАВНЫЙ МОЗГ (Ядро).
-CORE_PATH="/opt/remnawave"
-
-# 2. Список точек, куда мы сейчас нагрянем с проверкой.
+# 2. Список точек обновляем динамически от найденного ядра
 SERVICES=(
-    "/opt/remnawave"
+    "$CORE_PATH" # Тут сам ищет ноду или панель! если не найдет добавляй путь ниже!
     "/opt/remnawave/nginx"
     "/opt/certwarden"
     "/opt/certwardenclient"
@@ -44,54 +71,20 @@ SERVICES=(
 # ⛔ ДАЛЬШЕ НЕ ЛЕЗЬ, ТАМ ТОК И БОЛЬ (СИСТЕМНАЯ ЛОГИКА) ⛔
 # ==================================================================================
 
-# ========== HELPER: ИЩЕЙКА КОНФИГА ==========
-find_compose_file() {
-    local dir="$1"
-    local file=$(find "$dir" -maxdepth 1 -type f \( -name "*compose*.yml" -o -name "*compose*.yaml" \) | sort | head -n 1)
-    echo "$file"
-}
-
-# ========== БЛОК: УСТАНОВКА И ПРОВЕРКА (INSTALL CHECK) ==========
-CURRENT_EXEC=$(readlink -f "$0")
-
-# 1. Если скрипт запущен НЕ из /root/don_remna_up.sh
-if [ "$CURRENT_EXEC" != "$INSTALL_PATH" ]; then
-    clear
-    echo -e "${MAGENTA}🚀 Запуск 'на лету'. Скачиваю базу...${NC}"
-    
-    if command -v curl >/dev/null 2>&1; then
-        curl -s -o "$INSTALL_PATH" "$UPDATE_URL"
-    else
-        wget -q -O "$INSTALL_PATH" "$UPDATE_URL"
-    fi
-
-    if [ ! -s "$INSTALL_PATH" ]; then
-        echo -e "${RED}❌ Не смог скачать скрипт. Гитхаб лежит или инета нет.${NC}"
-        if [ ! -f "$INSTALL_PATH" ]; then exit 1; fi
-    else
-        # ЛЕЧЕНИЕ ОТ WINDOWS
-        sed -i 's/\r$//' "$INSTALL_PATH"
-        
-        chmod +x "$INSTALL_PATH"
-        ln -sf "$INSTALL_PATH" "$LINK_PATH"
-        echo -e "${GREEN}✅ Установлено в $INSTALL_PATH${NC}"
-        echo -e "${CYAN}🔄 Перезапускаюсь...${NC}"
-        sleep 1
-        
-        # === ВОТ ОНО, ИСПРАВЛЕНИЕ ===
-        # Запускаем установленный скрипт, принудительно отдавая ему клавиатуру (tty)
-        # Это решает проблему вылета при запуске через curl/wget
-        exec bash "$INSTALL_PATH" < /dev/tty
-        exit 0
-    fi
-fi
-
-# 2. Если скрипт УЖЕ в правильной папке, но симлинка donup НЕТ
+# ========== БЛОК: Я ТУТ ТЕПЕРЬ ЖИВУ (AUTO-INSTALL) ==========
+REAL_PATH=$(readlink -f "$0")
+LINK_PATH="/usr/local/bin/donup"
 CURRENT_LINK_TARGET=$(readlink -f "$LINK_PATH" 2>/dev/null)
-if [ "$CURRENT_LINK_TARGET" != "$INSTALL_PATH" ]; then
-    chmod +x "$INSTALL_PATH"
-    ln -sf "$INSTALL_PATH" "$LINK_PATH"
+
+if [ "$REAL_PATH" != "$CURRENT_LINK_TARGET" ]; then
+    chmod +x "$REAL_PATH"
+    ln -sf "$REAL_PATH" "$LINK_PATH"
     
+    # Удаляем старый файл с неправильным именем, если он есть
+    if [ -f "/root/don_remna.sh" ]; then
+        rm -f "/root/don_remna.sh"
+    fi
+
     clear
     echo -e "${GREEN}######################################################${NC}"
     echo -e "${GREEN}#                                                    #${NC}"
@@ -100,40 +93,52 @@ if [ "$CURRENT_LINK_TARGET" != "$INSTALL_PATH" ]; then
     echo -e "${GREEN}######################################################${NC}"
     echo ""
     echo -e "${YELLOW}Слушай сюда. Теперь я тут главный по обновам.${NC}"
-    echo -e "${YELLOW}В следующий раз пиши: ${MAGENTA}donup${NC}"
+    echo -e "${YELLOW}Захочешь обновиться — просто свистни (введи команду):${NC}"
     echo ""
-    echo -e "Жми ${GREEN}[ENTER]${NC}, погнали работать..."
-    # Читаем именно с tty, чтобы не зависеть от пайпов
-    read < /dev/tty
+    echo -e "           👉  ${MAGENTA}donup${NC}  👈"
+    echo ""
+    echo -e "${CYAN}P.S. Старый файл я снес, чтобы ты не путался.${NC}"
+    echo ""
+    echo -e "Жми ${GREEN}[ENTER]${NC}, погнали работать, время — деньги..."
+    read
 fi
 
-# ========== РАЗВЕДКА БОЕМ (PRE-SCAN v3.0) ==========
-DETECTED_COMPOSE=$(find_compose_file "$CORE_PATH")
+# ========== РАЗВЕДКА БОЕМ (SCAN & DETECT v2) ==========
+COMPOSE_FILE="$CORE_PATH/docker-compose.yml"
+# Если .yml не найден, пробуем .yaml
+if [ ! -f "$COMPOSE_FILE" ]; then COMPOSE_FILE="$CORE_PATH/docker-compose.yaml"; fi
 
 SERVER_TYPE="UNKNOWN"
 SERVER_LABEL="НЕПОНЯТНАЯ ДИЧЬ"
-COMPOSE_NAME_FOR_SHOW="нет файла"
 
-if [ -n "$DETECTED_COMPOSE" ]; then
-    COMPOSE_NAME_FOR_SHOW=$(basename "$DETECTED_COMPOSE")
+if [ -f "$COMPOSE_FILE" ]; then
+    # Теперь смотрим в корень: проверяем ОБРАЗЫ (IMAGES), это точнее имен контейнеров.
     
-    if grep -q "image:.*backend" "$DETECTED_COMPOSE" || grep -q "image:.*remnawave/panel" "$DETECTED_COMPOSE"; then
-        SERVER_TYPE="PANEL"
-        SERVER_LABEL="👑 ПАХАН (PANEL)"
-    elif grep -q "image:.*remnawave/node" "$DETECTED_COMPOSE"; then
+    # 1. Сначала проверяем на НОДУ (NODE), так как в её имени тоже есть 'remnawave' (в image)
+    if grep -q "image:.*remnawave/node" "$COMPOSE_FILE"; then
         SERVER_TYPE="NODE"
         SERVER_LABEL="🚜 РАБОТЯГА (NODE)"
-    elif grep -q "container_name:.*remnawave" "$DETECTED_COMPOSE"; then 
+    
+    # 2. Потом проверяем на ПАНЕЛЬ (BACKEND)
+    elif grep -q "image:.*remnawave/backend" "$COMPOSE_FILE"; then
         SERVER_TYPE="PANEL"
-        SERVER_LABEL="👑 ПАХАН (BY NAME)"
-    elif grep -q "container_name:.*remnanode" "$DETECTED_COMPOSE"; then
+        SERVER_LABEL="👑 ПАХАН (PANEL)"
+
+    # 3. Фолбэк на имена контейнеров, если образы кастомные
+    elif grep -q "container_name:.*remnanode" "$COMPOSE_FILE"; then
         SERVER_TYPE="NODE"
-        SERVER_LABEL="🚜 РАБОТЯГА (BY NAME)"
+        SERVER_LABEL="🚜 РАБОТЯГА (NODE)"
+    elif grep -q "container_name:.*remnawave" "$COMPOSE_FILE"; then
+        SERVER_TYPE="PANEL"
+        SERVER_LABEL="👑 ПАХАН (PANEL)"
+    
     else
         SERVER_LABEL="👽 МУТАНТ (CUSTOM)"
     fi
 else
-    SERVER_LABEL="👻 ПРИЗРАК (ФАЙЛ НЕ НАЙДЕН)"
+    SERVER_LABEL="👻 ПРИЗРАК (НЕТ КОНФИГА)"
+    echo -e "${RED}💀 Файла docker-compose.yml нет в $CORE_PATH!${NC}"
+    exit 1
 fi
 
 # ========== HELPER ФУНКЦИИ ==========
@@ -142,7 +147,7 @@ print_header() {
     clear
     echo -e "${MAGENTA}######################################################"
     echo -e "#                                                    #"
-    echo -e "#          💣 DON MATTEO UPGRADER v1.8 💣            #"
+    echo -e "#          💣 DON MATTEO UPGRADER v1.4 💣            #"
     echo -e "#            Инструмент для четких админов           #"
     echo -e "#       Косяков не прощаем. Работаем по красоте.     #"
     echo -e "#                                                    #"
@@ -173,28 +178,24 @@ print_error() {
     local code="$1"
     local dir="$2"
     echo -e "${RED}💀 КОСЯК [Код: $code]${NC}"
-    echo -e "${YELLOW}🔍 Чекни лог, брат:${NC}"
-    local cfile=$(find_compose_file "$dir")
-    if [ -n "$cfile" ]; then
-        local last_err=$(cd "$dir" && docker compose -f "$(basename "$cfile")" up -d 2>&1 | tail -n 2)
-        echo -e "${RED}>>> ${last_err}${NC}"
-    else
-        echo -e "${RED}>>> Файл compose не найден в $dir${NC}"
-    fi
+    echo -e "${YELLOW}🔍 Чё-то пошло не по плану. Чекни лог, брат:${NC}"
+    local last_err=$(cd "$dir" && docker compose up -d 2>&1 | tail -n 2)
+    echo -e "${RED}>>> ${last_err}${NC}"
     echo -e "------------------------------------------------------"
 }
 
 confirm_execution() {
     print_header
     echo -e "${YELLOW}📢 ВНИМАНИЕ! Сейчас будет суета. Разносим (обновляем) сервер.${NC}"
-    echo -e "Вот список жертв:"
+    echo -e "Тип сервера определен как: $SERVER_LABEL"
+    echo -e "Вот список жертв, которых мы затронем:"
     echo ""
     
     local found=0
     for dir in "${SERVICES[@]}"; do
         if [ -d "$dir" ]; then
              if [ "$dir" == "$CORE_PATH" ]; then
-                echo -e "   ⭐ ${CYAN}$dir${NC} ($SERVER_LABEL) [${YELLOW}$COMPOSE_NAME_FOR_SHOW${NC}]"
+                echo -e "   ⭐ ${CYAN}$dir${NC} ($SERVER_LABEL)"
              else
                 echo -e "   🎯 ${CYAN}$dir${NC}"
              fi
@@ -203,20 +204,12 @@ confirm_execution() {
     done
 
     if [ $found -eq 0 ]; then
-        echo -e "${RED}❌ Слыш, а где файлы? Я ничё не нашел. Проверь CONFIG!${NC}"
+        echo -e "${RED}❌ Слыш, а где файлы? Я ничё не нашел. Проверь пути!${NC}"
         exit 1
     fi
     
     echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}💡 НЕ ВИДИШЬ СВОЮ ПАПКУ? РАЗУЙ ГЛАЗА!${NC}"
-    echo -e "   Зайди в файл и поправь пути:"
-    echo -e "   ${YELLOW}nano $INSTALL_PATH${NC}" 
-    echo -e "   Секция ${MAGENTA}CONFIG ZONE${NC} вверху. Я ждал, пока ты спросишь."
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-    echo ""
-    echo -e "${MAGENTA}Ну чё, ты готов или как?${NC}"
+    echo -e "${MAGENTA}Ну чё, ты готов или как? Бэкапы — для слабаков, но я предупредил.${NC}"
     
     ROASTS=(
         "Эй, хакер, ты пальцы в узел завязал? 'y' или 'n'!"
@@ -224,6 +217,7 @@ confirm_execution() {
         "Соберись, тряпка! Мне нужно 'y' (давай) или 'n' (вали)."
         "Ты головой по клаве бьёшься? Попади по букве 'y'!"
         "Я щас сам за тебя нажму... Шучу. Давай рожай."
+        "Может тебе курсы компьютерной грамотности оплатить?"
         "Не зли меня. 'y' или 'n'. Это просто."
         "Ты испытываешь моё терпение... Нажми 'y'!"
         "Ctrl+C — выход для трусов. Будь мужиком, жми 'y'."
@@ -233,9 +227,7 @@ confirm_execution() {
 
     local needs_cleanup=false
     while true; do
-        # Читаем с TTY, чтобы гарантированно получить ввод пользователя
-        read -n 1 -r -s REPLY < /dev/tty
-        
+        read -n 1 -r -s REPLY
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             echo ""
             echo -e "${GREEN}Во, наш человек. Наводим суету! 🚀${NC}"
@@ -266,18 +258,12 @@ confirm_execution
 print_section "🛑" "ЭТАП 1: ГАСИМ СВЕТ (DOWN)"
 for dir in "${SERVICES[@]}"; do
     if [ -d "$dir" ]; then
-        cfile=$(find_compose_file "$dir")
-        if [ -n "$cfile" ]; then
-            fname=$(basename "$cfile")
-            print_action "💤" "Вырубаем ($fname)" "$dir"
-            (cd "$dir" && docker compose -f "$fname" down) &>/dev/null
-            if [ $? -eq 0 ]; then 
-                print_success
-            else 
-                print_error $? "$dir"
-            fi
-        else
-            echo -e "${YELLOW}⚠️  В $dir нет compose-файла. Пропускаю.${NC}"
+        print_action "💤" "Вырубаем всё в" "$dir"
+        (cd "$dir" && docker compose down) &>/dev/null
+        if [ $? -eq 0 ]; then 
+            print_success
+        else 
+            print_error $? "$dir"
         fi
     fi
 done
@@ -291,16 +277,12 @@ echo ""
 print_section "🔄" "ЭТАП 2: ТЯНЕМ ОБНОВЫ С НЕБЕС (PULL)"
 for dir in "${SERVICES[@]}"; do
     if [ -d "$dir" ]; then
-        cfile=$(find_compose_file "$dir")
-        if [ -n "$cfile" ]; then
-            fname=$(basename "$cfile")
-            print_action "📥" "Засасываем ($fname)" "$dir"
-            (cd "$dir" && docker compose -f "$fname" pull) &>/dev/null
-            if [ $? -eq 0 ]; then 
-                print_success
-            else 
-                print_error $? "$dir"
-            fi
+        print_action "📥" "Засасываем свежак в" "$dir"
+        (cd "$dir" && docker compose pull) &>/dev/null
+        if [ $? -eq 0 ]; then 
+            print_success
+        else 
+            print_error $? "$dir"
         fi
     fi
 done
@@ -314,17 +296,10 @@ if [ ! -d "$CORE_PATH" ]; then
     exit 1
 fi
 
-if [ -z "$DETECTED_COMPOSE" ]; then
-    echo -e "${RED}❌ В папке ядра ($CORE_PATH) нет ни одного файла *compose*.yml!${NC}"
-    echo -e "${RED}   Как я тебе это запущу? Силой мысли?${NC}"
-    exit 1
-fi
-
-CORE_FILENAME=$(basename "$DETECTED_COMPOSE")
 echo -e "${MAGENTA}🔍 Кто тут у нас:${NC} $SERVER_LABEL"
-print_action "🚀" "Поднимаем ($CORE_FILENAME)" "$SERVER_LABEL"
+print_action "🚀" "Поднимаем эту махину" "$SERVER_LABEL"
 
-(cd "$CORE_PATH" && docker compose -f "$CORE_FILENAME" up -d) &>/dev/null
+(cd "$CORE_PATH" && docker compose up -d) &>/dev/null
 RES=$?
 if [ $RES -eq 0 ]; then 
     print_success
@@ -345,17 +320,13 @@ for dir in "${SERVICES[@]}"; do
     if [ "$dir" == "$CORE_PATH" ]; then continue; fi
     
     if [ -d "$dir" ]; then
-        cfile=$(find_compose_file "$dir")
-        if [ -n "$cfile" ]; then
-            fname=$(basename "$cfile")
-            print_action "🔌" "Врубаем ($fname)" "$dir"
-            (cd "$dir" && docker compose -f "$fname" up -d) &>/dev/null
-            RES=$?
-            if [ $RES -eq 0 ]; then 
-                print_success
-            else 
-                print_error $RES "$dir"
-            fi
+        print_action "🔌" "Врубаем рубильник на" "$dir"
+        (cd "$dir" && docker compose up -d) &>/dev/null
+        RES=$?
+        if [ $RES -eq 0 ]; then 
+            print_success
+        else 
+            print_error $RES "$dir"
         fi
     fi
 done
@@ -363,8 +334,6 @@ echo ""
 
 # --- ЭТАП 5: ЛОГИ ---
 print_section "📝" "ЭТАП 5: СМОТРИ В ГЛАЗА (LOGS)"
-
-CORE_LOG_CMD="docker compose -f \"$CORE_FILENAME\" logs -f"
 
 if [ "$SERVER_TYPE" == "PANEL" ]; then
     echo -e "${GREEN}📡 Это у нас:${NC} ${CYAN}МАСТЕР-СЕРВЕР${NC}"
@@ -377,31 +346,28 @@ if [ "$SERVER_TYPE" == "PANEL" ]; then
         fi
     done
 
-    NGINX_COMPOSE=""
     if [ -n "$NGINX_PATH" ] && [ -d "$NGINX_PATH" ]; then
-        NGINX_COMPOSE=$(find_compose_file "$NGINX_PATH")
-    fi
-
-    if [ -n "$NGINX_COMPOSE" ]; then
         echo -e "${GREEN}📄 Вывожу логи Nginx. Если там ошибки 500 — я не виноват.${NC}"
         echo ""
-        cd "$NGINX_PATH" && docker compose -f "$(basename "$NGINX_COMPOSE")" logs -f
+        cd "$NGINX_PATH" && docker compose logs -f
     else
         echo -e "${GREEN}📄 Вывожу логи Панели...${NC}"
         echo ""
-        cd "$CORE_PATH" && eval $CORE_LOG_CMD
+        cd "$CORE_PATH" && docker compose logs -f
     fi
 
 elif [ "$SERVER_TYPE" == "NODE" ]; then
     echo -e "${YELLOW}🤖 Это у нас:${NC} ${CYAN}НОДА${NC}"
     echo -e "${YELLOW}📄 Вывожу логи Узла. Надеюсь, коннект есть...${NC}"
     echo ""
-    cd "$CORE_PATH" && eval $CORE_LOG_CMD
+    cd "$CORE_PATH" && docker compose logs -f
 
 else
     echo -e "${RED}🤡 Это у нас:${NC} ${CYAN}ХЗ ЧТО ТАКОЕ${NC}"
     echo -e "Конфиг есть, но я не ванга. Смотри логи сам:"
     echo ""
-    cd "$CORE_PATH" && eval $CORE_LOG_CMD
+    cd "$CORE_PATH" && docker compose logs -f
 fi
 ENDOFFILE
+
+chmod +x /root/don_remna_up.sh
