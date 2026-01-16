@@ -4,7 +4,7 @@ cat > /root/don_remna_up.sh << 'ENDOFFILE'
 # ==========================================
 #  DON MATTEO SYSTEM UPGRADER
 #  Code: LETHAL | Style: GANGSTA | Status: GOD MODE
-#  Edition: INSTALLER FIX (v1.5)
+#  Edition: ANTI-WINDOWS FIX (v1.6)
 # ==========================================
 
 # Цветовая палитра
@@ -54,7 +54,7 @@ find_compose_file() {
 # ========== БЛОК: УСТАНОВКА И ПРОВЕРКА (INSTALL CHECK) ==========
 CURRENT_EXEC=$(readlink -f "$0")
 
-# 1. Если скрипт запущен НЕ из /root/don_remna_up.sh (например, через curl pipe)
+# 1. Если скрипт запущен НЕ из /root/don_remna_up.sh
 if [ "$CURRENT_EXEC" != "$INSTALL_PATH" ]; then
     clear
     echo -e "${MAGENTA}🚀 Запуск 'на лету'. Скачиваю базу...${NC}"
@@ -67,9 +67,12 @@ if [ "$CURRENT_EXEC" != "$INSTALL_PATH" ]; then
 
     if [ ! -s "$INSTALL_PATH" ]; then
         echo -e "${RED}❌ Не смог скачать скрипт. Гитхаб лежит или инета нет.${NC}"
-        # Если файла нет вообще - выход
         if [ ! -f "$INSTALL_PATH" ]; then exit 1; fi
     else
+        # === ЛЕЧЕНИЕ ОТ WINDOWS (CRLF) ===
+        sed -i 's/\r$//' "$INSTALL_PATH"
+        # ================================
+        
         chmod +x "$INSTALL_PATH"
         ln -sf "$INSTALL_PATH" "$LINK_PATH"
         echo -e "${GREEN}✅ Установлено в $INSTALL_PATH${NC}"
@@ -80,8 +83,7 @@ if [ "$CURRENT_EXEC" != "$INSTALL_PATH" ]; then
     fi
 fi
 
-# 2. Если скрипт УЖЕ в правильной папке, но симлинка donup НЕТ (случай с wget)
-# Проверяем, куда ведет симлинк. Если не на нас или его нет - чиним.
+# 2. Если скрипт УЖЕ в правильной папке, но симлинка donup НЕТ
 CURRENT_LINK_TARGET=$(readlink -f "$LINK_PATH" 2>/dev/null)
 if [ "$CURRENT_LINK_TARGET" != "$INSTALL_PATH" ]; then
     chmod +x "$INSTALL_PATH"
@@ -113,6 +115,7 @@ COMPOSE_NAME_FOR_SHOW="нет файла"
 if [ -n "$DETECTED_COMPOSE" ]; then
     COMPOSE_NAME_FOR_SHOW=$(basename "$DETECTED_COMPOSE")
     
+    # Ищем маркеры в файле
     if grep -q "image:.*backend" "$DETECTED_COMPOSE" || grep -q "image:.*remnawave/panel" "$DETECTED_COMPOSE"; then
         SERVER_TYPE="PANEL"
         SERVER_LABEL="👑 ПАХАН (PANEL)"
@@ -138,7 +141,7 @@ print_header() {
     clear
     echo -e "${MAGENTA}######################################################"
     echo -e "#                                                    #"
-    echo -e "#          💣 DON MATTEO UPGRADER v1.5 💣            #"
+    echo -e "#          💣 DON MATTEO UPGRADER v1.6 💣            #"
     echo -e "#            Инструмент для четких админов           #"
     echo -e "#       Косяков не прощаем. Работаем по красоте.     #"
     echo -e "#                                                    #"
