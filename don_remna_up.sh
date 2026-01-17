@@ -65,8 +65,6 @@ SERVICES=(
     "/opt/certwardenclient"
     "/opt/remnawave/subscription"
     "/opt/remnawave/remnawave-telegram-sub-mini-app"
-    "/opt/remnawave-bedolaga-telegram-bot"
-    "/opt/bedolaga-cabinet"
 )
 
 # ==================================================================================
