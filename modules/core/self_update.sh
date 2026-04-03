@@ -65,16 +65,40 @@ install_script() {
 
     log "Скрипт успешно установлен."
     ok "Решала установлена в системе."
-    printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}sudo reshala${C_RESET}"
+    printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}reshala${C_RESET}"
+
+    # --- Умный враппер: работает с sudo и без него ---
+    local wrapper_script="/usr/local/bin/reshala"
+    # Удаляем старый симлинк, создаём умный wrapper-скрипт
+    rm -f "${wrapper_script}"
+    cat > "${wrapper_script}" << 'WRAPPER_EOF'
+#!/bin/bash
+# Умный лаунчер Решалы: пробует sudo, если нет — запускает напрямую
+TARGET="/opt/reshala/reshala.sh"
+if [[ $EUID -eq 0 ]]; then
+    exec "$TARGET" "$@"
+elif command -v sudo >/dev/null 2>&1; then
+    exec sudo "$TARGET" "$@"
+else
+    echo "[!] sudo не найден, пробую запустить напрямую..." >&2
+    exec "$TARGET" "$@"
+fi
+WRAPPER_EOF
+    chmod +x "${wrapper_script}"
+
+    # Убираем устаревший алиас sudo reshala из .bashrc (если есть)
+    if [ -f /root/.bashrc ]; then
+        sed -i "/alias reshala=/d" /root/.bashrc 2>/dev/null || true
+    fi
+
     warn "ВАЖНО: переподключись к серверу, чтобы команда заработала в новой сессии."
 
     # Автозапуск Решалы сразу после установки
-    # В режиме SKYNET мы передаём RESHALA_NO_AUTOSTART=1, чтобы не запускать интерактивную Решалу
     if [[ "${RESHALA_NO_AUTOSTART:-0}" != "1" ]]; then
         echo ""
         info "Стартую Решалу прямо сейчас..."
         sleep 1
-        exec "$INSTALL_PATH"
+        exec "$wrapper_script"
     fi
 }
 
@@ -118,11 +142,22 @@ _self_update_is_remote_newer() {
 }
 
 check_for_updates() {
-    local remote_version_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/reshala.sh?cachebuster=$(date +%s)"
-    local remote_ver; remote_ver=$(curl -s -L --connect-timeout 5 "$remote_version_url" | grep 'readonly VERSION=' | cut -d'"' -f2)
+    local remote_version_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/reshala.sh?cb=$(date +%s)"
+    local remote_ver
+    remote_ver=$(curl -s -L --connect-timeout 8 --max-time 12 "$remote_version_url" 2>/dev/null \
+        | grep 'readonly VERSION=' | head -1 | cut -d'"' -f2)
 
-    if [[ -n "$remote_ver" ]] && _self_update_is_remote_newer "$VERSION" "$remote_ver"; then
+    if [[ -z "$remote_ver" ]]; then
+        debug_log "check_for_updates: не удалось получить версию с GitHub (branch=${REPO_BRANCH})"
+        UPDATE_AVAILABLE=0; LATEST_VERSION=""
+        return
+    fi
+
+    debug_log "check_for_updates: local=${VERSION} remote=${remote_ver}"
+
+    if _self_update_is_remote_newer "$VERSION" "$remote_ver"; then
         UPDATE_AVAILABLE=1; LATEST_VERSION="$remote_ver"
+        log "[ОБНОВЛЕНИЕ] Доступно: ${VERSION} -> ${remote_ver}"
     else
         UPDATE_AVAILABLE=0; LATEST_VERSION=""
     fi

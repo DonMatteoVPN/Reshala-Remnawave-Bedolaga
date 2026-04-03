@@ -120,10 +120,14 @@ def get_ip(key):
     if isinstance(key, dict):
         ip_parts = key.get('addr', [0, 0, 0, 0])
     elif isinstance(key, list) and len(key) >= 16:
-        # Reconstruct 4x u32 little-endian из 16 байт
+        # bpftool raw format: каждый элемент может быть int или hex-строкой ("0a")
+        def to_byte(x):
+            if isinstance(x, int): return x
+            return int(x, 16)  # "0a" → 10
         ip_parts = []
         for i in range(4):
-            val = key[i*4] | (key[i*4+1] << 8) | (key[i*4+2] << 16) | (key[i*4+3] << 24)
+            val = to_byte(key[i*4]) | (to_byte(key[i*4+1]) << 8) | \
+                  (to_byte(key[i*4+2]) << 16) | (to_byte(key[i*4+3]) << 24)
             ip_parts.append(val)
     else:
         return str(key)
