@@ -16,6 +16,17 @@ import os
 import json
 
 DEFAULT_PIN_DIR = "/sys/fs/bpf/reshala/maps"
+MAX_PORTS = 32  # Must match #define MAX_PORTS in shaper.bpf.c
+
+def parse_ports(ports_str):
+    """Парсит строку портов '443,80,0' -> [443, 80] | '0' -> []"""
+    try:
+        parts = [int(p.strip()) for p in str(ports_str).split(',') if p.strip()]
+    except ValueError:
+        return []
+    # 0 = все порты (пустой список = нет фильтрации)
+    ports = [p for p in parts if 0 < p <= 65535]
+    return ports[:MAX_PORTS]
 
 def run_cmd(cmd, check=True):
     try:
@@ -49,35 +60,49 @@ def bpftool_map_dump(pin_dir, map_name):
     except json.JSONDecodeError:
         return []
 
-def set_config(pin_dir, mode, port, d_mbps, u_mbps, burst_mb, win_sec, pen_sec):
-    # Конвертация: Мбит/с → байт/с, МБ → байт, с → нс
-    d_bps = int((d_mbps * 1024 * 1024) / 8)
-    u_bps = int((u_mbps * 1024 * 1024) / 8)
+def set_config(pin_dir, mode, ports_str, d_mbs, u_mbs, burst_mb, win_sec, pen_sec):
+    # МБ/с → байт/с
+    d_bps = int(d_mbs * 1024 * 1024)
+    u_bps = int(u_mbs * 1024 * 1024)
     burst_bytes = int(burst_mb * 1024 * 1024)
     win_ns = int(win_sec * 1_000_000_000)
     pen_ns = int(pen_sec * 1_000_000_000)
 
-    # struct config_data: __u32 mode, __u32 target_port,
-    #   __u64 normal_rate_bps, __u64 penalty_rate_bps,
-    #   __u64 burst_bytes_limit, __u64 window_time_ns, __u64 penalty_time_ns
-    d_payload = struct.pack("<I I Q Q Q Q Q", mode, port, d_bps, d_bps, burst_bytes, win_ns, pen_ns)
-    u_payload = struct.pack("<I I Q Q Q Q Q", mode, port, u_bps, u_bps, burst_bytes, win_ns, pen_ns)
+    # Парсим и дополняем до MAX_PORTS нулями
+    ports_list = parse_ports(ports_str)
+    num_ports = len(ports_list)
+    ports_padded = ports_list + [0] * (MAX_PORTS - len(ports_list))
+
+    # struct config_data (C-layout):
+    #   __u32 mode                     4 bytes  offset 0
+    #   __u32 num_ports                4 bytes  offset 4
+    #   __u32 ports[MAX_PORTS=16]     64 bytes  offset 8
+    #   __u64 normal_rate_bps          8 bytes  offset 72
+    #   __u64 penalty_rate_bps         8 bytes  offset 80
+    #   __u64 burst_bytes_limit        8 bytes  offset 88
+    #   __u64 window_time_ns           8 bytes  offset 96
+    #   __u64 penalty_time_ns          8 bytes  offset 104
+    #   Total: 112 bytes
+    fmt = f"<I I {MAX_PORTS}I Q Q Q Q Q"
+    d_payload = struct.pack(fmt, mode, num_ports, *ports_padded, d_bps, d_bps, burst_bytes, win_ns, pen_ns)
+    u_payload = struct.pack(fmt, mode, num_ports, *ports_padded, u_bps, u_bps, burst_bytes, win_ns, pen_ns)
 
     d_hex = " ".join([f"{b:02x}" for b in d_payload])
     u_hex = " ".join([f"{b:02x}" for b in u_payload])
 
-    # Index 0 = Download, Index 1 = Upload
     bpftool_map_update(pin_dir, "config_map", "00 00 00 00", d_hex)
     bpftool_map_update(pin_dir, "config_map", "01 00 00 00", u_hex)
 
+    ports_display = ", ".join(str(p) for p in ports_list) if ports_list else "ВСЕ ПОРТЫ"
     print(f"✅ Конфигурация применена:")
     print(f"   Режим   : {'Статика' if mode == 1 else 'Динамика'}")
-    print(f"   Порт    : {port if port != 0 else 'Все'}")
-    print(f"   Download: {d_mbps} Мбит/с  ({d_bps} байт/с)")
-    print(f"   Upload  : {u_mbps} Мбит/с  ({u_bps} байт/с)")
+    print(f"   Порты   : {ports_display}")
+    print(f"   Download: {d_mbs} МБ/с  = {d_mbs * 8} Мбит/с  ({d_bps:,} байт/с)")
+    print(f"   Upload  : {u_mbs} МБ/с  = {u_mbs * 8} Мбит/с  ({u_bps:,} байт/с)")
     if mode == 2:
         print(f"   Burst   : {burst_mb} МБ в окне {win_sec}с")
         print(f"   Штраф   : {pen_sec}с")
+
 
 def format_bytes(n):
     for unit in ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']:
@@ -87,8 +112,22 @@ def format_bytes(n):
     return f"{n:.2f} ПБ"
 
 def get_ip(key):
-    """Распаковывает struct ip_key { __u32 addr[4]; }."""
-    ip_parts = key['addr']
+    """Разбирает struct ip_key.
+    bpftool может выдавать:
+    - BTF-формат:  {"addr": [int, int, int, int]}
+    - Raw-формат:  [b0, b1, ..., b15]  (16 байт, 4x u32 little-endian)
+    """
+    if isinstance(key, dict):
+        ip_parts = key.get('addr', [0, 0, 0, 0])
+    elif isinstance(key, list) and len(key) >= 16:
+        # Reconstruct 4x u32 little-endian из 16 байт
+        ip_parts = []
+        for i in range(4):
+            val = key[i*4] | (key[i*4+1] << 8) | (key[i*4+2] << 16) | (key[i*4+3] << 24)
+            ip_parts.append(val)
+    else:
+        return str(key)
+
     if ip_parts[1] == 0 and ip_parts[2] == 0 and ip_parts[3] == 0:
         raw = ip_parts[0]
         return f"{raw & 0xFF}.{(raw >> 8) & 0xFF}.{(raw >> 16) & 0xFF}.{(raw >> 24) & 0xFF}"
@@ -98,25 +137,41 @@ def get_ip(key):
         parts.append(f"{(p >> 16) & 0xFFFF:04x}:{p & 0xFFFF:04x}")
     return ":".join(parts)
 
+def get_value_field(value, field_name, byte_offset, byte_size=8):
+    """Читает поле из value — поддерживает BTF-dict и raw-list."""
+    if isinstance(value, dict):
+        return int(value.get(field_name, 0))
+    elif isinstance(value, list):
+        # Читаем little-endian integer из байтового массива
+        chunk = value[byte_offset:byte_offset + byte_size]
+        result = 0
+        for i, b in enumerate(chunk):
+            result |= b << (8 * i)
+        return result
+    return 0
+
 def dump_stats(pin_dir):
     users_d = bpftool_map_dump(pin_dir, "user_state_map_down")
     users_u = bpftool_map_dump(pin_dir, "user_state_map_up")
 
+    # struct user_state field offsets:
+    # bytes_in_window[0:8], window_start_time[8:16], penalty_end_time[16:24],
+    # last_departure_time[24:32], total_bytes[32:40], is_penalized[40:44]
     stats = {}
     for u in users_d:
         ip = get_ip(u['key'])
-        stats[ip] = {
-            "down": int(u['value']['total_bytes']),
-            "up": 0,
-            "pen_d": int(u['value']['is_penalized']),
-            "pen_u": 0
-        }
+        total = get_value_field(u['value'], 'total_bytes', 32, 8)
+        penalized = get_value_field(u['value'], 'is_penalized', 40, 4)
+        stats[ip] = {"down": total, "up": 0, "pen_d": penalized, "pen_u": 0}
+
     for u in users_u:
         ip = get_ip(u['key'])
+        total = get_value_field(u['value'], 'total_bytes', 32, 8)
+        penalized = get_value_field(u['value'], 'is_penalized', 40, 4)
         if ip not in stats:
             stats[ip] = {"down": 0, "up": 0, "pen_d": 0, "pen_u": 0}
-        stats[ip]["up"] = int(u['value']['total_bytes'])
-        stats[ip]["pen_u"] = int(u['value']['is_penalized'])
+        stats[ip]["up"] = total
+        stats[ip]["pen_u"] = penalized
 
     if not stats:
         print("Нет данных. Трафик ещё не проходил через шейпер.")
@@ -141,9 +196,10 @@ def build_parser():
 
     set_parser = subparsers.add_parser("set", help="Применить конфигурацию")
     set_parser.add_argument("--mode", type=int, choices=[1, 2], required=True)
-    set_parser.add_argument("--port", type=int, default=0)
-    set_parser.add_argument("--down", type=float, required=True, help="Download (Мбит/с)")
-    set_parser.add_argument("--up", type=float, required=True, help="Upload (Мбит/с)")
+    set_parser.add_argument("--ports", type=str, default="0",
+                            help="Порты через запятую (0=все порты). Пример: 443,80,8080")
+    set_parser.add_argument("--down", type=float, required=True, help="Download (МБ/с)")
+    set_parser.add_argument("--up", type=float, required=True, help="Upload (МБ/с)")
     set_parser.add_argument("--burst", type=float, default=70.0)
     set_parser.add_argument("--win", type=int, default=10)
     set_parser.add_argument("--pen", type=int, default=60)
@@ -161,7 +217,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.command == "set":
-        set_config(args.pin_dir, args.mode, args.port, args.down, args.up,
+        set_config(args.pin_dir, args.mode, args.ports, args.down, args.up,
                    args.burst, args.win, args.pen)
     elif args.command == "status":
         dump_stats(args.pin_dir)

@@ -150,8 +150,69 @@ _tl_show_listening_ports_smart() {
     echo "------------------------------------------------------------"
 }
 
+_tl_show_speed_reference() {
+    echo
+    printf "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  📡 Справка по скоростям (лимит на 1 пользователя)     ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Применение              Мин.   Комфорт   Идеал${C_RESET}        ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  📞 Звонки / VoIP        0.1    0.5 МБ/с  1 МБ/с       ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  🎵 Музыка / Telegram    0.1    0.3 МБ/с  0.5 МБ/с     ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  📺 YouTube 720p         0.5    1.0 МБ/с  1.5 МБ/с     ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  📺 YouTube 1080p        1.0    2.0 МБ/с  3.0 МБ/с     ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  🎬 YouTube 4K / Netflix  3.0   6.0 МБ/с  12.0 МБ/с    ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  ${C_GREEN}Рекомендуем: 3-5 МБ/с = комфорт для большинства${C_RESET}      ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  👥 Кол-во пользователей при лимите 3 МБ/с:            ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}     Канал 1 Гбит/с  → ~${C_YELLOW}40 пользователей${C_RESET}             ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}     Канал 10 Гбит/с → ~${C_YELLOW}416 пользователей${C_RESET}            ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}  👥 При лимите 5 МБ/с:                                 ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}     Канал 1 Гбит/с  → ~${C_YELLOW}25 пользователей${C_RESET}             ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}║${C_RESET}     Канал 10 Гбит/с → ~${C_YELLOW}250 пользователей${C_RESET}            ${C_CYAN}║${C_RESET}\n"
+    printf "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}\n"
+    echo
+}
+
+_tl_show_shaper_intro() {
+    printf "  ${C_CYAN}\u2554$(printf '\u2550%.0s' {1..58})\u2557${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_YELLOW}\u26a1 Reshala eBPF Traffic Shaper v3.1${C_RESET}                       ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2560$(printf '\u2550%.0s' {1..58})\u2563${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GRAY}\u0427\u0442\u043e \u044d\u0442\u043e\u003f${C_RESET}                                                ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  \u0413\u0440\u0430\u043d\u0438\u0447\u043d\u0438\u043a \u0441\u043a\u043e\u0440\u043e\u0441\u0442\u0438 \u043d\u0430 \u0431\u0430\u0437\u0435 ${C_YELLOW}eBPF + EDT${C_RESET} \u043d\u0430           ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  \u043e\u0441\u043d\u043e\u0432\u0435 Linux \u044f\u0434\u0440\u0430. \u0420\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u043d\u0430 ${C_YELLOW}L3/L4${C_RESET} (IP+TCP/UDP)    ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GREEN}\u2714${C_RESET} \u041b\u0438\u043c\u0438\u0442 \u0441\u043a\u043e\u0440\u043e\u0441\u0442\u044c \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u043e \u043f\u043e \u043a\u0430\u0436\u0434\u043e\u043c\u0443 IP             ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GREEN}\u2714${C_RESET} \u0420\u0430\u0437\u0434\u0435\u043b\u044c\u043d\u044b\u0439 \u043b\u0438\u043c\u0438\u0442 \u0434\u043b\u044f Download \u0438 Upload         ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GREEN}\u2714${C_RESET} \u041f\u043e\u043b\u043d\u0430\u044f \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0430 IPv4 \u0438 IPv6              ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GREEN}\u2714${C_RESET} 0% \u043a\u043e\u043b\u043b\u0438\u0437\u0438\u0439 \u0445\u0435\u0448\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f (eBPF Hash Map \u043f\u043e IP) ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GREEN}\u2714${C_RESET} \u0414\u043e 32 \u043f\u043e\u0440\u0442\u043e\u0432 \u043e\u0434\u043d\u043e\u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e                ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2560$(printf '\u2550%.0s' {1..58})\u2563${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GRAY}\u041a\u0430\u043a \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442\u003f${C_RESET}                                             ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_YELLOW}Download${C_RESET}: ens3 \u2192 ${C_GREEN}eBPF (EDT)${C_RESET} \u2192 fq qdisc \u2192 \u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c    ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_YELLOW}Upload${C_RESET}  : \u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u2192 IFB0 \u2192 ${C_GREEN}eBPF (EDT)${C_RESET} \u2192 fq qdisc    ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  EDT = Earliest Departure Time (\u0442\u043e\u0447\u043d\u043e\u0435 \u0432\u0440\u0435\u043c\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0438)   ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2560$(printf '\u2550%.0s' {1..58})\u2563${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GRAY}\u0420\u0435\u0436\u0438\u043c\u044b \u0440\u0430\u0431\u043e\u0442\u044b${C_RESET}                                             ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GREEN}[1] \u0421\u0442\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438\u0439${C_RESET}: \u0436\u0451\u0441\u0442\u043a\u0438\u0439 \u043b\u0438\u043c\u0438\u0442 \u0432\u0441\u0435\u0433\u0434\u0430            ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_YELLOW}[2] \u0414\u0438\u043d\u0430\u043c\u0438\u0447\u0435\u0441\u043a\u0438\u0439${C_RESET}: burst \u2192 \u043a\u0432\u043e\u0442\u0430 \u2192 \u0448\u0442\u0440\u0430\u0444 \u2192 \u043d\u043e\u0440\u043c\u0430   ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2560$(printf '\u2550%.0s' {1..58})\u2563${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_GRAY}\u041e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f${C_RESET}                                                ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_RED}\u26a0${C_RESET}  \u042f\u0434\u0440\u043e Linux \u2265 5.4 (bpf_ktime, EDT, clsact)       ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_RED}\u26a0${C_RESET}  \u041d\u0435 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0441 \u0437\u0430\u0448\u0438\u0444\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u043c \u0442\u0440\u0430\u0444\u0438\u043a\u043e\u043c (\u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442  ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}     \u043d\u0430 \u0443\u0440\u043e\u0432\u043d\u0435 IP, \u0430 \u043d\u0435 \u0441\u043e\u0434\u0435\u0440\u0436\u0438\u043c\u043e\u0433\u043e \u043f\u0430\u043a\u0435\u0442\u043e\u0432)    ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_RED}\u26a0${C_RESET}  \u041c\u0430\u043a\u0441. \u043e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u0435\u043c\u044b\u0445 IP: 65536 \u043d\u0430 \u043d\u0430\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435    ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u2551${C_RESET}  ${C_RED}\u26a0${C_RESET}  \u041c\u0430\u043a\u0441. \u043f\u043e\u0440\u0442\u043e\u0432 \u0432 \u043e\u0434\u043d\u043e\u043c \u043f\u0440\u0430\u0432\u0438\u043b\u0435: 32          ${C_CYAN}\u2551${C_RESET}\n"
+    printf "  ${C_CYAN}\u255a$(printf '\u2550%.0s' {1..58})\u255d${C_RESET}\n"
+    echo
+}
+
 _tl_apply_limit_ebpf_wizard() {
     _tl_ensure_ebpf_deps || return
+    clear; menu_header "eBPF Шейпер — Информация"
+    _tl_show_shaper_intro
+    wait_for_enter
+
     clear; menu_header "eBPF Шейпер: Шаг 1 (Интерфейс)"
     local iface; iface=$(_tl_select_interface) || return
 
@@ -160,18 +221,23 @@ _tl_apply_limit_ebpf_wizard() {
     printf_menu_option "2" "Динамический (Квоты + Штраф)"
     local mode; mode=$(ask_number_in_range "Выбери режим" 1 2 1) || return
 
-    clear; menu_header "eBPF Шейпер: Шаг 3 (Порт)"
+    clear; menu_header "eBPF Шейпер: Шаг 3 (Порты)"
     _tl_show_listening_ports_smart
-    local port; port=$(safe_read "Целевой порт (0 = ВСЕ ПОРТЫ)" "0") || return
+    echo
+    info "Можно указать несколько портов через запятую: ${C_YELLOW}443,80,8080${C_RESET} — или ${C_YELLOW}0${C_RESET} для всех"
+    local ports_input; ports_input=$(safe_read "Порты (через запятую, 0 = все порты)" "0") || return
+    # Убираем пробелы
+    ports_input=$(echo "$ports_input" | tr -d ' ')
 
     clear; menu_header "eBPF Шейпер: Шаг 4 (Скорости)"
-    local down_speed; down_speed=$(ask_number_in_range "Скачивание (DL) Мбит/с" 1 10000 50) || return
-    local up_speed; up_speed=$(ask_number_in_range "Загрузка (UL) Мбит/с" 1 10000 50) || return
+    _tl_show_speed_reference
+    local down_speed; down_speed=$(ask_number_in_range "Скачивание (DL) МБ/с" 1 5000 5) || return
+    local up_speed; up_speed=$(ask_number_in_range "Загрузка (UL) МБ/с" 1 5000 5) || return
     
-    local pspeed=10; local burst=100; local win=10; local pen=60
+    local pspeed=1; local burst=100; local win=10; local pen=60
     if [[ "$mode" == "2" ]]; then
-        pspeed=$(ask_number_in_range "Скорость при ШТРАФЕ (Мбит/с)" 1 1000 10) || return
-        burst=$(ask_number_in_range "Квота на Burst (Мбайт)" 1 50000 100) || return
+        pspeed=$(ask_number_in_range "Скорость при ШТРАФЕ (МБ/с)" 1 1000 1) || return
+        burst=$(ask_number_in_range "Квота на Burst (МБайт)" 1 50000 100) || return
         win=$(ask_number_in_range "Окно проверки (секунд)" 1 3600 10) || return
         pen=$(ask_number_in_range "Длительность штрафа (секунд)" 1 3600 60) || return
     fi
@@ -179,9 +245,9 @@ _tl_apply_limit_ebpf_wizard() {
     clear; menu_header "Финальная проверка"
     print_key_value "Интерфейс" "$iface" 25
     print_key_value "Режим" "$( [[ "$mode" == "1" ]] && echo "Статика" || echo "Динамика" )" 25
-    print_key_value "Порт" "$port" 25
-    print_key_value "Download" "$down_speed Мбит/с" 25
-    print_key_value "Upload" "$up_speed Мбит/с" 25
+    print_key_value "Порты" "$( [[ "$ports_input" == "0" ]] && echo "ВСЕ ПОРТЫ" || echo "$ports_input" )" 25
+    print_key_value "Download" "$down_speed МБ/с  ($(( down_speed * 8 )) Мбит/с)" 25
+    print_key_value "Upload" "$up_speed МБ/с  ($(( up_speed * 8 )) Мбит/с)" 25
     echo
     if ! ask_yes_no "Применить?"; then return; fi
 
@@ -191,7 +257,7 @@ _tl_apply_limit_ebpf_wizard() {
     cat << EOF > "${TL_CONFIG_DIR}/ebpf_config.conf"
 IFACE="${iface}"
 MODE="${mode}"
-PORT="${port}"
+PORTS="${ports_input}"
 DOWN="${down_speed}"
 UP="${up_speed}"
 BURST="${burst}"
@@ -253,7 +319,7 @@ ExecStartPre=/sbin/tc qdisc add dev ifb0 clsact
 ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action pinned ${PIN_PROGS}/handle_up
 
 # === ЗАГРУЗКА КОНФИГУРАЦИИ В BPF MAP (через pinned path) ===
-ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN}
+ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} set --mode ${MODE} --ports ${PORTS} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN}
 
 # === ОСТАНОВКА ===
 ExecStop=/bin/rm -rf ${TL_BPF_PIN_DIR}

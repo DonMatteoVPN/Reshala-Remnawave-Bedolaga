@@ -14,10 +14,13 @@
  * v3.1: Support separate Download/Upload paths.
  */
 
+#define MAX_PORTS 32
+
 // Configuration structure
 struct config_data {
     __u32 mode;                // 1 = Static, 2 = Dynamic
-    __u32 target_port;         // Port to shape (0 = all)
+    __u32 num_ports;           // How many ports to filter (0 = all traffic)
+    __u32 ports[MAX_PORTS];   // Ports to shape (up to 16)
     __u64 normal_rate_bps;     // Normal rate in bytes/sec
     __u64 penalty_rate_bps;    // Penalty rate in bytes/sec
     __u64 burst_bytes_limit;   // Allowed burst before penalty (bytes)
@@ -124,10 +127,17 @@ static __always_inline int process_packet(struct __sk_buff *skb, __u32 config_id
     }
 
     // --- Port Filtering ---
-    if (conf->target_port != 0) {
-        if (sport != conf->target_port && dport != conf->target_port) {
-            return TC_ACT_OK; 
+    // If num_ports == 0: pass ALL traffic
+    // If num_ports  > 0: pass ONLY matching ports
+    if (conf->num_ports > 0) {
+        __u32 matched = 0;
+        for (__u32 i = 0; i < MAX_PORTS; i++) {
+            if (i >= conf->num_ports) break;
+            __u16 p = (__u16)conf->ports[i];
+            if (p == 0) break;
+            if (sport == p || dport == p) { matched = 1; break; }
         }
+        if (!matched) return TC_ACT_OK;
     }
 
     // --- User state management ---
