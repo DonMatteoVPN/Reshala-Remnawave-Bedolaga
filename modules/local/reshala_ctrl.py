@@ -216,7 +216,7 @@ def read_config(pin_dir):
         }
     return None
 
-def dump_stats(pin_dir):
+def dump_stats(pin_dir, full=False):
     # --- Читаем конфигурацию ---
     cfg = read_config(pin_dir)
 

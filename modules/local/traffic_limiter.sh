@@ -214,11 +214,35 @@ _tl_apply_limit_ebpf_wizard() {
     wait_for_enter
 
     clear; menu_header "eBPF Шейпер: Шаг 1 (Интерфейс)"
+    echo -e "  ${C_YELLOW}💡 Как выбрать интерфейс?${C_RESET}"
+    echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
+    echo -e "  ${C_GREEN}✔${C_RESET} Выбирай основной сетевой интерфейс (обычно ${C_YELLOW}ens3${C_RESET}, ${C_YELLOW}eth0${C_RESET}, ${C_YELLOW}enp3s0${C_RESET})"
+    echo -e "  ${C_GREEN}✔${C_RESET} Это тот интерфейс, через который идёт трафик пользователей"
+    echo -e "  ${C_RED}✗${C_RESET} НЕ выбирай ${C_GRAY}docker0${C_RESET}, ${C_GRAY}br-*${C_RESET}, ${C_GRAY}veth*${C_RESET} — это внутренние мосты Docker"
+    echo -e "  ${C_RED}✗${C_RESET} НЕ выбирай ${C_GRAY}lo${C_RESET} — это loopback (петля, только для локального трафика)"
+    echo -e ""
+    echo -e "  ${C_GRAY}Подсказка: у основного интерфейса обычно наибольший трафик"
+    echo -e "  в iftop и он связан с публичным IP-адресом сервера.${C_RESET}"
+    echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
+    echo
     local iface; iface=$(_tl_select_interface) || return
 
     clear; menu_header "eBPF Шейпер: Шаг 2 (Режим)"
-    printf_menu_option "1" "Статический (Простой лимит)"
-    printf_menu_option "2" "Динамический (Квоты + Штраф)"
+    echo -e "  ${C_YELLOW}💡 Выбери режим шейпинга:${C_RESET}"
+    echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
+    echo -e ""
+    echo -e "  ${C_GREEN}[1] Статический${C_RESET} — жёсткий лимит скорости всегда"
+    echo -e "      ${C_GRAY}Каждый пользователь получает ровно N МБ/с в любое время."
+    echo -e "      Превысить лимит невозможно. Просто и предсказуемо.${C_RESET}"
+    echo -e "      ${C_CYAN}→ Подходит для: VPN, игровых серверов, стабильного качества${C_RESET}"
+    echo -e ""
+    echo -e "  ${C_YELLOW}[2] Динамический${C_RESET} — burst → квота → штраф → восстановление"
+    echo -e "      ${C_GRAY}Пользователь может скачать быстро до квоты (например 100 МБ),"
+    echo -e "      после чего скорость резко падает (штраф, например 1 МБ/с),"
+    echo -e "      а через заданное время восстанавливается до полной скорости.${C_RESET}"
+    echo -e "      ${C_CYAN}→ Подходит для: ограничения «качальщиков», справедливое распределение${C_RESET}"
+    echo -e ""
+    echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
     local mode; mode=$(ask_number_in_range "Выбери режим" 1 2 1) || return
 
     clear; menu_header "eBPF Шейпер: Шаг 3 (Порты)"
