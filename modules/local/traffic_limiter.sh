@@ -336,9 +336,50 @@ EOF
 }
 
 _tl_show_status() {
-    if ! systemctl is-active --quiet "${TL_SERVICE_NAME}"; then warn "Не запущен."; return; fi
-    clear; menu_header "Статистика eBPF шейпера"
-    python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" status
+    while true; do
+        clear
+        menu_header "📊 Статистика eBPF шейпера"
+
+        if ! systemctl is-active --quiet "${TL_SERVICE_NAME}"; then
+            printf_warning "Шейпер не запущен. Статистика недоступна."
+            echo ""
+            printf_menu_option "r" "🔄 Запустить шейпер"
+            printf_menu_option "b" "🔙 Назад"
+            print_separator "-" 60
+            local c; c=$(safe_read "Выбор") || return
+            case "$c" in
+                r|R) systemctl start "${TL_SERVICE_NAME}" && ok "Запущен." ;;
+                b|B|q|Q) return ;;
+            esac
+            continue
+        fi
+
+        echo ""
+        python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" status
+        echo ""
+
+        print_separator "-" 60
+        printf_menu_option "r" "🔄 Обновить статистику (топ-10)"
+        printf_menu_option "f" "📋 Показать полный список всех IP"
+        printf_menu_option "c" "🧹 Сбросить счётчики (перезапуск)"
+        printf_menu_option "b" "🔙 Назад"
+        print_separator "-" 60
+
+        local choice; choice=$(safe_read "Выбор") || return
+        case "$choice" in
+            r|R) continue ;;
+            f|F)
+                clear; menu_header "📋 Все IP — полный список"
+                python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" status --full
+                wait_for_enter ;;
+            c|C)
+                if ask_yes_no "Перезапустить шейпер (сбросит счётчики)?" "n"; then
+                    _tl_restart_ebpf_engine
+                    sleep 1
+                fi ;;
+            b|B|q|Q) return ;;
+        esac
+    done
 }
 
 _tl_restart_ebpf_engine() {

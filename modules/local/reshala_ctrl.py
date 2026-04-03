@@ -167,40 +167,148 @@ def get_value_field(value, field_name, byte_offset, byte_size=8):
         return result
     return 0
 
+def read_config(pin_dir):
+    """Читает текущую конфигурацию из BPF config_map (index 0 = Download)."""
+    raw = bpftool_map_dump(pin_dir, "config_map")
+    if not raw:
+        return None
+    # Ищем запись с key=0 (Download config)
+    for entry in raw:
+        key = entry.get('key', {})
+        # key может быть dict {"":0} или list ["00","00","00","00"]
+        key_val = 0
+        if isinstance(key, dict):
+            key_val = list(key.values())[0] if key else 0
+        elif isinstance(key, list) and len(key) >= 1:
+            b = key[0]
+            key_val = b if isinstance(b, int) else int(b, 16)
+        if key_val != 0:
+            continue
+
+        val = entry.get('value', {})
+        if isinstance(val, dict):
+            mode = int(val.get('mode', 0))
+            num_ports = int(val.get('num_ports', 0))
+            ports_raw = val.get('ports', [])
+            ports = [int(p) for p in ports_raw if int(p) > 0][:num_ports] if ports_raw else []
+            rate_bps = int(val.get('normal_rate_bps', 0))
+            penalty_bps = int(val.get('penalty_rate_bps', 0))
+        elif isinstance(val, list):
+            def rb(x): return x if isinstance(x, int) else int(x, 16)
+            def read_u32(lst, off): return rb(lst[off]) | (rb(lst[off+1])<<8) | (rb(lst[off+2])<<16) | (rb(lst[off+3])<<24)
+            def read_u64(lst, off): return sum(rb(lst[off+i])<<(8*i) for i in range(8))
+            mode = read_u32(val, 0)
+            num_ports = read_u32(val, 4)
+            ports = [read_u32(val, 8 + i*4) for i in range(min(num_ports, MAX_PORTS)) if read_u32(val, 8+i*4) > 0]
+            rate_bps = read_u64(val, 8 + MAX_PORTS*4)
+            penalty_bps = read_u64(val, 8 + MAX_PORTS*4 + 8)
+        else:
+            return None
+
+        rate_mbs = rate_bps / (1024 * 1024)
+        penalty_mbs = penalty_bps / (1024 * 1024)
+        return {
+            'mode': mode,
+            'ports': ports,
+            'rate_mbs': rate_mbs,
+            'penalty_mbs': penalty_mbs,
+            'rate_bps': rate_bps,
+        }
+    return None
+
 def dump_stats(pin_dir):
+    # --- Читаем конфигурацию ---
+    cfg = read_config(pin_dir)
+
+    # --- Красивый заголовок с правилами ---
+    print(f"\033[0;36m{'═'*62}\033[0m")
+    if cfg:
+        mode_str = "Статический" if cfg['mode'] == 1 else "Динамический"
+        ports_str = ", ".join(str(p) for p in cfg['ports']) if cfg['ports'] else "ВСЕ ПОРТЫ"
+        rate_str  = f"{cfg['rate_mbs']:.1f} МБ/с ({cfg['rate_mbs']*8:.0f} Мбит/с)"
+        pen_str   = f"{cfg['penalty_mbs']:.1f} МБ/с" if cfg['mode'] == 2 else "—"
+        print(f"\033[0;33m  Применённые правила:\033[0m")
+        print(f"  \033[0;90mРежим     :\033[0m  {mode_str}")
+        print(f"  \033[0;90mПорты     :\033[0m  {ports_str}")
+        print(f"  \033[0;90mЛимит DL  :\033[0m  {rate_str}")
+        print(f"  \033[0;90mЛимит UL  :\033[0m  {rate_str}")
+        if cfg['mode'] == 2:
+            print(f"  \033[0;90mШтраф     :\033[0m  {pen_str}")
+    else:
+        print("  \033[0;31m⚠ Конфигурация не найдена (шейпер не настроен?)\033[0m")
+    print(f"\033[0;36m{'═'*62}\033[0m")
+
+    # --- Сбор статистики пользователей ---
     users_d = bpftool_map_dump(pin_dir, "user_state_map_down")
     users_u = bpftool_map_dump(pin_dir, "user_state_map_up")
 
-    # struct user_state field offsets:
-    # bytes_in_window[0:8], window_start_time[8:16], penalty_end_time[16:24],
-    # last_departure_time[24:32], total_bytes[32:40], is_penalized[40:44]
+    # struct user_state offsets:
+    # bytes_in_window[0:8], window_start[8:16], penalty_end[16:24],
+    # last_departure[24:32], total_bytes[32:40], is_penalized[40:44]
     stats = {}
     for u in users_d:
         ip = get_ip(u['key'])
-        total = get_value_field(u['value'], 'total_bytes', 32, 8)
+        total     = get_value_field(u['value'], 'total_bytes',  32, 8)
         penalized = get_value_field(u['value'], 'is_penalized', 40, 4)
         stats[ip] = {"down": total, "up": 0, "pen_d": penalized, "pen_u": 0}
 
     for u in users_u:
         ip = get_ip(u['key'])
-        total = get_value_field(u['value'], 'total_bytes', 32, 8)
+        total     = get_value_field(u['value'], 'total_bytes',  32, 8)
         penalized = get_value_field(u['value'], 'is_penalized', 40, 4)
         if ip not in stats:
             stats[ip] = {"down": 0, "up": 0, "pen_d": 0, "pen_u": 0}
-        stats[ip]["up"] = total
+        stats[ip]["up"]    = total
         stats[ip]["pen_u"] = penalized
 
     if not stats:
-        print("Нет данных. Трафик ещё не проходил через шейпер.")
+        print("\n  Нет данных. Трафик ещё не проходил через шейпер.")
+        print("  Убедись, что пользователи подключены и используют указанные порты.")
         return
 
-    sorted_ips = sorted(stats.keys(), key=lambda x: stats[x]['down'] + stats[x]['up'], reverse=True)
-    print(f"{'IP-адрес':<40} | {'Скачано':<15} | {'Загружено':<15} | Штраф")
-    print("-" * 95)
-    for ip in sorted_ips:
+    # --- Топ-10 или весь список ---
+    all_sorted = sorted(stats.keys(),
+                        key=lambda x: stats[x]['down'] + stats[x]['up'],
+                        reverse=True)
+    display_ips = all_sorted if full else all_sorted[:10]
+
+    total_users = len(stats)
+    label = f"Весь список ({total_users} IP)" if full else f"Топ-{min(10,total_users)} из {total_users} активных IP"
+    print(f"\n  \033[1;37m{label}:\033[0m")
+
+    _sep   = "─" * 60
+    _dl    = "↓"
+    _ul    = "↑"
+    _pen   = "⚡"
+    _ok    = "✔"
+    _warn  = "⚠"
+    print(f"  {_sep}")
+    hdr = f"  {'IP-адрес':<30} {_dl + ' Скачано':<13} {_ul + ' Загружено':<13} {'Лимит / Штраф'}"
+    print(f"\033[0;90m{hdr}\033[0m")
+    print(f"  {_sep}")
+
+    for idx, ip in enumerate(display_ips):
         s = stats[ip]
-        pen = "ДА ⚠️" if (s['pen_d'] or s['pen_u']) else "нет"
-        print(f"{ip:<40} | {format_bytes(s['down']):<15} | {format_bytes(s['up']):<15} | {pen}")
+        is_pen = s['pen_d'] or s['pen_u']
+        if cfg and is_pen and cfg['mode'] == 2:
+            limit_str = f"\033[0;31m{_pen} ШТРАФ {cfg['penalty_mbs']:.1f} МБ/с\033[0m"
+        elif cfg:
+            limit_str = f"\033[0;32m{_ok} {cfg['rate_mbs']:.1f} МБ/с\033[0m"
+        else:
+            limit_str = f"{_warn} неизв."
+
+        print(f"  {ip:<30} {format_bytes(s['down']):<13} {format_bytes(s['up']):<13} {limit_str}")
+
+        # В режиме полного списка — пауза каждые 40 строк
+        if full and (idx + 1) % 40 == 0 and (idx + 1) < len(display_ips):
+            try:
+                input(f"\n  [Ещё {len(display_ips)-(idx+1)} IP. Enter — продолжить, Ctrl+C — стоп]")
+            except (KeyboardInterrupt, EOFError):
+                print("\n  Остановлено.")
+                break
+
+    print(f"  {'\u2500'*60}")
+    print(f"  Всего уникальных IP: {total_users}")
 
 
 def build_parser():
@@ -221,7 +329,8 @@ def build_parser():
     set_parser.add_argument("--win", type=int, default=10)
     set_parser.add_argument("--pen", type=int, default=60)
 
-    subparsers.add_parser("status", help="Показать статистику по IP")
+    status_parser = subparsers.add_parser("status", help="Показать статистику по IP")
+    status_parser.add_argument("--full", action="store_true", help="Вывести весь список IP (не только топ-10)")
     return parser
 
 
@@ -237,6 +346,7 @@ if __name__ == "__main__":
         set_config(args.pin_dir, args.mode, args.ports, args.down, args.up,
                    args.burst, args.win, args.pen)
     elif args.command == "status":
-        dump_stats(args.pin_dir)
+        full = getattr(args, 'full', False)
+        dump_stats(args.pin_dir, full=full)
     else:
         parser.print_help()
