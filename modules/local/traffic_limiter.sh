@@ -253,7 +253,7 @@ ExecStartPre=/sbin/tc qdisc add dev ifb0 clsact
 ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action pinned ${PIN_PROGS}/handle_up
 
 # === ЗАГРУЗКА КОНФИГУРАЦИИ В BPF MAP (через pinned path) ===
-ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN} --pin-dir ${PIN_MAPS}
+ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN}
 
 # === ОСТАНОВКА ===
 ExecStop=/bin/rm -rf ${TL_BPF_PIN_DIR}

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # ============================================================ #
 # ==        RESHALA eBPF TRAFFIC LIMITER CONTROLLER         == #
-# ==              reshala_ctrl.py  v3.2                     == #
+# ==              reshala_ctrl.py  v3.3                     == #
 # ============================================================ #
 #
-# Управляет BPF-картами шейпера через pinned path (/sys/fs/bpf/reshala/).
-# Использование pinned path решает ошибку "several maps match this handle",
-# которая возникает при bpftool map update name <name>.
+# Управляет BPF-картами шейпера через pinned path (/sys/fs/bpf/reshala/maps/).
+# --pin-dir может стоять ДО или ПОСЛЕ subcommand (set/status).
 #
 
 import sys
@@ -16,7 +15,7 @@ import argparse
 import os
 import json
 
-DEFAULT_PIN_DIR = "/sys/fs/bpf/reshala"
+DEFAULT_PIN_DIR = "/sys/fs/bpf/reshala/maps"
 
 def run_cmd(cmd, check=True):
     try:
@@ -28,11 +27,11 @@ def run_cmd(cmd, check=True):
         sys.exit(1)
 
 def bpftool_map_update(pin_dir, map_name, key_hex, value_hex):
-    """Обновляет карту через pinned path — избегает 'several maps match'."""
+    """Обновляет карту через pinned path."""
     pin_path = os.path.join(pin_dir, map_name)
     if not os.path.exists(pin_path):
-        print(f"❌ BPF map pin not found: {pin_path}")
-        print(f"   Убедись что сервис запущен и пины созданы.")
+        print(f"❌ BPF map pin не найден: {pin_path}")
+        print(f"   Убедись что сервис запущен: systemctl status reshala-traffic-limiter")
         sys.exit(1)
     cmd = f"bpftool map update pinned {pin_path} key hex {key_hex} value hex {value_hex}"
     run_cmd(cmd)
@@ -42,8 +41,8 @@ def bpftool_map_dump(pin_dir, map_name):
     pin_path = os.path.join(pin_dir, map_name)
     if not os.path.exists(pin_path):
         return []
-    out, _ = run_cmd(f"bpftool map dump pinned {pin_path} -j", check=False)
-    if not out:
+    out, rc = run_cmd(f"bpftool map dump pinned {pin_path} -j", check=False)
+    if not out or rc != 0:
         return []
     try:
         return json.loads(out)
@@ -51,16 +50,16 @@ def bpftool_map_dump(pin_dir, map_name):
         return []
 
 def set_config(pin_dir, mode, port, d_mbps, u_mbps, burst_mb, win_sec, pen_sec):
-    # Конвертация: Мбит/с и МБ → байты/с и нс
+    # Конвертация: Мбит/с → байт/с, МБ → байт, с → нс
     d_bps = int((d_mbps * 1024 * 1024) / 8)
     u_bps = int((u_mbps * 1024 * 1024) / 8)
     burst_bytes = int(burst_mb * 1024 * 1024)
     win_ns = int(win_sec * 1_000_000_000)
     pen_ns = int(pen_sec * 1_000_000_000)
 
-    # Упаковываем в C-структуру struct config_data:
-    # __u32 mode, __u32 target_port, __u64 normal_rate_bps, __u64 penalty_rate_bps,
-    # __u64 burst_bytes_limit, __u64 window_time_ns, __u64 penalty_time_ns
+    # struct config_data: __u32 mode, __u32 target_port,
+    #   __u64 normal_rate_bps, __u64 penalty_rate_bps,
+    #   __u64 burst_bytes_limit, __u64 window_time_ns, __u64 penalty_time_ns
     d_payload = struct.pack("<I I Q Q Q Q Q", mode, port, d_bps, d_bps, burst_bytes, win_ns, pen_ns)
     u_payload = struct.pack("<I I Q Q Q Q Q", mode, port, u_bps, u_bps, burst_bytes, win_ns, pen_ns)
 
@@ -88,7 +87,7 @@ def format_bytes(n):
     return f"{n:.2f} ПБ"
 
 def get_ip(key):
-    """Распаковывает struct ip_key { __u32 addr[4]; } в строку IP."""
+    """Распаковывает struct ip_key { __u32 addr[4]; }."""
     ip_parts = key['addr']
     if ip_parts[1] == 0 and ip_parts[2] == 0 and ip_parts[3] == 0:
         raw = ip_parts[0]
@@ -112,7 +111,6 @@ def dump_stats(pin_dir):
             "pen_d": int(u['value']['is_penalized']),
             "pen_u": 0
         }
-
     for u in users_u:
         ip = get_ip(u['key'])
         if ip not in stats:
@@ -121,26 +119,24 @@ def dump_stats(pin_dir):
         stats[ip]["pen_u"] = int(u['value']['is_penalized'])
 
     if not stats:
-        print("Нет данных. Возможно трафик ещё не проходил через шейпер.")
+        print("Нет данных. Трафик ещё не проходил через шейпер.")
         return
 
     sorted_ips = sorted(stats.keys(), key=lambda x: stats[x]['down'] + stats[x]['up'], reverse=True)
-
-    print(f"{'IP-адрес':<40} | {'Скачано':<15} | {'Загружено':<15} | {'Штраф'}")
+    print(f"{'IP-адрес':<40} | {'Скачано':<15} | {'Загружено':<15} | Штраф")
     print("-" * 95)
     for ip in sorted_ips:
         s = stats[ip]
         pen = "ДА ⚠️" if (s['pen_d'] or s['pen_u']) else "нет"
         print(f"{ip:<40} | {format_bytes(s['down']):<15} | {format_bytes(s['up']):<15} | {pen}")
 
-if __name__ == "__main__":
-    if os.getuid() != 0:
-        print("Ошибка: скрипт должен запускаться от root.")
-        sys.exit(1)
 
-    parser = argparse.ArgumentParser(description="Reshala eBPF Traffic Limiter Controller v3.2")
+def build_parser():
+    parser = argparse.ArgumentParser(description="Reshala eBPF Traffic Limiter Controller v3.3")
+    # --pin-dir определён на КОРНЕВОМ парсере — должен идти ПЕРЕД subcommand
     parser.add_argument("--pin-dir", default=DEFAULT_PIN_DIR,
-                        help=f"Путь к пинингованным BPF-картам (default: {DEFAULT_PIN_DIR})")
+                        help=f"Путь к пинам BPF-карт (default: {DEFAULT_PIN_DIR})")
+
     subparsers = parser.add_subparsers(dest="command")
 
     set_parser = subparsers.add_parser("set", help="Применить конфигурацию")
@@ -153,7 +149,15 @@ if __name__ == "__main__":
     set_parser.add_argument("--pen", type=int, default=60)
 
     subparsers.add_parser("status", help="Показать статистику по IP")
+    return parser
 
+
+if __name__ == "__main__":
+    if os.getuid() != 0:
+        print("Ошибка: скрипт должен запускаться от root.")
+        sys.exit(1)
+
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.command == "set":
