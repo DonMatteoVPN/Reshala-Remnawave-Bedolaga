@@ -1,34 +1,22 @@
 #!/bin/bash
 # ============================================================ #
 # ==                 МОДУЛЬ ШЕЙПЕРА ТРАФИКА                 == #
-# ==                      VERSION 2.0                        == #
+# ==                      VERSION 3.1 (eBPF)                 == #
 # ============================================================ #
 #
-# Отвечает за настройку и управление лимитами скорости для
-# отдельных портов с помощью tc + u32 hashing (Stable Mode).
+# Отвечает за современное ограничение скорости с использованием
+# eBPF + EDT (Earliest Departure Time). 
+# Обеспечивает 0% коллизий, поддержку IPv6 и раздельный лимит DL/UL.
 #
 # ВЕРСИОНИРОВАНИЕ:
-#   v2.0 (28.12.2024) - Строгие лимиты: rate=ceil (burst 15k)
-#                     - Автоматическое обновление правил
-#   v1.0 (XX.12.2024) - Первая версия с динамическим ceil
+#   v3.1 (29.03.2025) - Исправлены ошибки компиляции, добавлен раздельный DL/UL
+#   v3.0 (29.03.2025) - Переход на eBPF + EDT (0% коллизий, IPv6)
 #
 #  ( РОДИТЕЛЬ | КЛАВИША | НАЗВАНИЕ | ФУНКЦИЯ | ПОРЯДОК | ГРУППА | ОПИСАНИЕ )
 # @menu.manifest
 #
-# @item( main | 2 | 🚦 Шейпер трафика ${C_GREEN}(Персональный лимит)${C_RESET} | show_traffic_limiter_menu | 2 | 0 | Ограничение скорости для каждого пользователя на порту. )
+# @item( main | 2 | 🚦 Шейпер трафика ${C_GREEN}(eBPF + EDT)${C_RESET} | show_traffic_limiter_menu | 2 | 0 | Умное ограничение скорости на базе eBPF. )
 #
-# @item( traffic_limiter | 1 | 📊 Текущий статус (Топ-5) | _tl_show_status | 10 | 1 | Показывает активные правила и топ потребителей. )
-# @item( traffic_limiter | 2 | ➕ Добавить/изменить лимит | _tl_apply_limit_wizard | 20 | 1 | Запускает мастер настройки для порта. )
-# @item( traffic_limiter | 3 | ➖ Удалить лимит(ы) | _show_delete_submenu | 30 | 1 | Позволяет выбрать и удалить один или все лимиты. )
-# @item( traffic_limiter | 4 | 📜 Посмотреть лог сервиса | _tl_view_service_log | 40 | 2 | Показывает системный журнал для службы шейпера. )
-# @item( traffic_limiter | 5 | 📈 Мониторинг трафика (iftop) | _tl_monitor_traffic | 50 | 2 | Запуск утилиты iftop для просмотра текущей скорости. )
-# @item( traffic_limiter | 6 | 🔄 Перезагрузить (Сброс статы) | _tl_restart_service | 60 | 2 | Перезапуск сервиса обнуляет счетчики трафика. )
-# @item( traffic_limiter | 7 | 💾 Бэкап / Восстановление | _tl_backup_menu | 70 | 2 | Сохранение и восстановление конфигурации. )
-#
-# @item( traffic_limiter_delete | 1 | 🗑️ Удалить лимит для порта | _tl_clear_one_limit | 10 | 1 )
-# @item( traffic_limiter_delete | 2 | ☠️ Удалить ВСЕ лимиты | _tl_clear_all_limits | 20 | 1 )
-#
-
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 1 # Защита от прямого запуска
 
@@ -36,404 +24,58 @@
 source "$SCRIPT_DIR/modules/core/common.sh"
 source "$SCRIPT_DIR/modules/core/dependencies.sh"
 
-
 # ============================================================ #
 # ==                  ГЛОБАЛЬНАЯ КОНФИГУРАЦИЯ               == #
 # ============================================================ #
-#
-# ⚙️ ИНСТРУКЦИЯ ПО ИЗМЕНЕНИЮ ПАРАМЕТРОВ:
-#
-# 1. Измени нужные параметры ниже (например, TL_DL_BURST="20k")
-# 2. Увеличь TL_CONFIG_VERSION (например, с "2" на "3")
-# 3. Перезалей файл в репозиторий Решалы или редактируй прямо там.
-# 4. Пользователь увидит красное предупреждение "Доступно обновление"
-# 5. Нажми 'u' для автоматического применения новых параметров
-#
-# ============================================================ #
 
-if [[ -z "${TL_CONFIG_DIR:-}" ]]; then
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │                   ПУТИ И СЕРВИСЫ                        │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_CONFIG_DIR="/etc/reshala/traffic_limiter"
-    # Папка с конфигами портов (port-8443.conf, port-443.conf, ...)
-    
-    readonly TL_BACKUP_DIR="/root/reshala_backups/traffic_limiter"
-    # Папка для бэкапов конфигураций
-    
-    readonly TL_APPLY_SCRIPT_PATH="/usr/local/bin/reshala-traffic-limiter-apply.sh"
-    # Скрипт, который применяет правила TC при старте сервиса
-    
-    readonly TL_SERVICE_NAME="reshala-traffic-limiter.service"
-    readonly TL_SERVICE_PATH="/etc/systemd/system/${TL_SERVICE_NAME}"
-    # Systemd сервис для автозапуска при перезагрузке
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │                    ВЕРСИОНИРОВАНИЕ                       │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_MODULE_VERSION="2.0"
-    # Версия модуля (отображается в UI)
-    # Увеличивай при глобальных изменениях интерфейса
-    
-    readonly TL_CONFIG_VERSION="3"
-    # ⚠️ ВАЖНО: Увеличивай эту версию при изменении параметров TC!
-    # Пример: Если меняешь TL_DL_BURST="15k" на "20k" — увеличь до "3"
-    # Система автоматически предложит обновить старые конфиги
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │         ПАРАМЕТРЫ TC HTB (DOWNLOAD = входящий)          │
-    # │  Применяются к КАЖДОМУ пользователю отдельно            │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_DL_RATE_MODE="strict"
-    # Режим ограничения скорости:
-    #   - "strict"   : rate = ceil (строгий лимит, нельзя превысить)
-    #   - "flexible" : rate < ceil (может занять свободную полосу)
-    # 
-    # РЕКОМЕНДАЦИЯ: "strict" для VPN (честная тарификация)
-    # ФОРМУЛА strict: htb rate 5mbit ceil 5mbit  → максимум 5 Mbit/s
-    # ФОРМУЛА flexible: htb rate 5mbit ceil 20mbit → может взять до 20 Mbit/s если канал пустой
-    
-    readonly TL_DL_BURST="20k"
-    # Размер burst (короткий всплеск на уровне rate)
-    # НАЗНАЧЕНИЕ: Уменьшает latency для мелких пакетов (DNS, ping, первые TCP segments)
-    # РАСЧЁТ: rate / HZ * 2, где HZ = частота ядра (обычно 250 или 1000)
-    #   Для rate=5mbit, HZ=250: 5000000 / 250 / 8 * 2 = 5000 bytes = 5k
-    #   Для rate=20mbit:       20000000 / 250 / 8 * 2 = 20000 bytes = 20k
-    # ТВОЯ НАСТРОЙКА 15k — компромисс между 5k (rate) и 20k (old ceil)
-    # 
-    # ЗНАЧЕНИЯ:
-    #   ""     → burst отключён
-    #   "5k"   → burst 5 килобайт (строго по rate)
-    #   "15k"  → burst 15 килобайт (умеренно, рекомендуется)
-    #   "30k"  → burst 30 килобайт (большие всплески)
-    
-    readonly TL_DL_CBURST=""
-    # Cburst (burst на уровне ceil, для микробурстов на wire speed)
-    # НАЗНАЧЕНИЕ: Позволяет кратковременные всплески на МАКСИМАЛЬНОЙ скорости канала
-    # КОГДА НУЖЕН: Только для flexible режима (rate < ceil)
-    # 
-    # ЗНАЧЕНИЯ:
-    #   ""     → cburst отключён (по умолчанию)
-    #   "20k"  → если используешь flexible режим с ceil > rate
-    # 
-    # ⚠️ НЕ ИСПОЛЬЗУЙ cburst в strict режиме (rate = ceil) — бесполезно!
-    
-    readonly TL_DL_QUANTUM="1500"
-    # Quantum = количество байт, отправляемых за один "time slice"
-    # РЕКОМЕНДАЦИЯ: 1500 байт = MTU Ethernet (размер одного пакета)
-    # АЛЬТЕРНАТИВЫ:
-    #   1500  → один пакет (рекомендуется)
-    #   3000  → два пакета (для высоких rate > 100 Mbit/s)
-    #   ""    → автоматический расчёт: rate / 10 / 8
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │         ПАРАМЕТРЫ TC HTB (UPLOAD = исходящий)           │
-    # │  Применяются к КАЖДОМУ пользователю отдельно            │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_UL_RATE_MODE="strict"
-    # Аналогично TL_DL_RATE_MODE (см. выше)
-    
-    readonly TL_UL_BURST=""
-    # Upload burst — обычно НЕ НУЖЕН для исходящего трафика
-    # ПОЧЕМУ: Upload имеет более равномерный характер (ACK пакеты, небольшие запросы)
-    # КОГДА ИСПОЛЬЗОВАТЬ: Если пользователи загружают большие файлы
-    # 
-    # ЗНАЧЕНИЯ:
-    #   ""     → burst отключён (рекомендуется)
-    #   "10k"  → если нужны всплески для upload
-    
-    readonly TL_UL_CBURST=""
-    # Upload cburst (аналогично TL_DL_CBURST)
-    
-    readonly TL_UL_QUANTUM="1500"
-    # Аналогично TL_DL_QUANTUM
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │              РОДИТЕЛЬСКИЕ КЛАССЫ (PORT)                 │
-    # │  Общий лимит для ВСЕХ пользователей на порту            │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_PARENT_QUANTUM="60000"
-    # Quantum для родительского класса (60 KB = ~40 пакетов)
-    # НАЗНАЧЕНИЕ: Регулирует, сколько трафика родитель может отправить за раз
-    # РЕКОМЕНДАЦИЯ: Оставь 60000 (работает для большинства случаев)
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │                  ПАРАМЕТРЫ HASHING                       │
-    # │  Определяют, сколько пользователей может быть на порту  │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_MAX_BUCKETS="256"
-    # Максимальное количество одновременных пользователей на ОДНОМ порту
-    # ТЕХНИЧЕСКОЕ ОБЪЯСНЕНИЕ: Создаётся 256 "корзин" (buckets), куда распределяются IP по хешу
-    # 
-    # ФОРМУЛА: Память на порт ≈ MAX_BUCKETS × 200 байт ≈ 51 KB на порт
-    # ОГРАНИЧЕНИЕ: Больше 256 нельзя (лимит u32 hash table)
-    # 
-    # ⚠️ ЕСЛИ У ТЕБЯ > 256 ПОЛЬЗОВАТЕЛЕЙ НА ПОРТУ:
-    #   - Будут коллизии (несколько IP в одном bucket)
-    #   - Эти пользователи РАЗДЕЛЯТ лимит между собой
-    #   - Пример: 2 IP в bucket с лимитом 5 Mbit → каждый получит ~2.5 Mbit
-    
-    readonly TL_HASH_DIVISOR="256"
-    # Размер hash-таблицы (ДОЛЖЕН БЫТЬ = MAX_BUCKETS)
-    # ⚠️ НЕ МЕНЯЙ ВРУЧНУЮ! Всегда синхронизируй с TL_MAX_BUCKETS
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │            ПАРАМЕТРЫ SFQ (Fair Queuing)                 │
-    # │  Честное распределение полосы между потоками            │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_SFQ_PERTURB="10"
-    # Период перемешивания хеш-функции SFQ (в секундах)
-    # НАЗНАЧЕНИЕ: Предотвращает коллизии хешей (когда разные потоки попадают в одну очередь)
-    # РЕКОМЕНДАЦИЯ: 10 секунд (стандарт)
-    # 
-    # ЗНАЧЕНИЯ:
-    #   "10"  → перемешивать каждые 10 секунд (рекомендуется)
-    #   "0"   → отключить перемешивание (НЕ рекомендуется)
-    #   ""    → отключить SFQ полностью (использовать pfifo вместо sfq)
-    
-    readonly TL_SFQ_LIMIT=""
-    # Лимит размера очереди SFQ (в пакетах)
-    # ЗНАЧЕНИЯ:
-    #   ""     → по умолчанию 127 пакетов (рекомендуется)
-    #   "64"   → маленькая очередь (меньше latency, больше потерь)
-    #   "256"  → большая очередь (больше bufferbloat)
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │                  ДЕФОЛТНЫЕ ЛИМИТЫ                        │
-    # │  Значения по умолчанию в визарде создания правил        │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_DEFAULT_DOWN_RATE="4"
-    # Дефолтный лимит СКАЧИВАНИЯ (Мбит/с) при создании нового порта
-    # Пользователь может изменить это значение в визарде
-    
-    readonly TL_DEFAULT_UP_RATE="4"
-    # Дефолтный лимит ЗАГРУЗКИ (Мбит/с)
-    
-    readonly TL_DEFAULT_TOTAL_LIMIT="10000mbit"
-    # Дефолтный лимит ПОРТА (максимум для всех юзеров вместе)
-    # 10000mbit = 10 Гбит/с (практически безлимит для большинства серверов)
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │                   IFB УСТРОЙСТВО                         │
-    # │  Виртуальный интерфейс для ограничения UPLOAD           │
-    # └─────────────────────────────────────────────────────────┘
-    
-    readonly TL_IFB_DEVICE="ifb0"
-    # Имя IFB устройства (не меняй без необходимости)
-    # ЗАЧЕМ: Linux не может ограничивать входящий трафик напрямую,
-    #        поэтому мы перенаправляем его на виртуальный IFB интерфейс
-    
-    readonly TL_IFB_COUNT="1"
-    # Количество IFB устройств для создания (обычно хватает одного)
-    
-    
-    # ┌─────────────────────────────────────────────────────────┐
-    # │         АВТОМАТИЧЕСКИЕ ПАРАМЕТРЫ (НЕ ТРОГАЙ!)           │
-    # │  Эти переменные рассчитываются автоматически             │
-    # └─────────────────────────────────────────────────────────┘
-    
-    # Генерация сигнатуры параметров DOWNLOAD
-    _tl_build_param_signature() {
-        local dl_params="rate"
-        [[ "$TL_DL_RATE_MODE" == "strict" ]] && dl_params+=" ceil"
-        [[ -n "$TL_DL_BURST" ]] && dl_params+=" burst"
-        [[ -n "$TL_DL_CBURST" ]] && dl_params+=" cburst"
-        [[ -n "$TL_DL_QUANTUM" ]] && dl_params+=" quantum"
-        echo "$dl_params"
-    }
-    readonly TL_DL_PARAMS_SIGNATURE="$(_tl_build_param_signature)"
-    # Пример вывода: "rate ceil burst quantum"
-    # Используется для проверки актуальности конфигов
-    
-    # Генерация сигнатуры параметров UPLOAD
-    _tl_build_ul_param_signature() {
-        local ul_params="rate"
-        [[ "$TL_UL_RATE_MODE" == "strict" ]] && ul_params+=" ceil"
-        [[ -n "$TL_UL_BURST" ]] && ul_params+=" burst"
-        [[ -n "$TL_UL_CBURST" ]] && ul_params+=" cburst"
-        [[ -n "$TL_UL_QUANTUM" ]] && ul_params+=" quantum"
-        echo "$ul_params"
-    }
-    readonly TL_UL_PARAMS_SIGNATURE="$(_tl_build_ul_param_signature)"
-    # Пример вывода: "rate ceil quantum"
-fi
-
-
-# ============================================================ #
-# ==              HELPER: ГЕНЕРАЦИЯ HTB КОМАНД              == #
-# ============================================================ #
-
-_tl_generate_htb_class_cmd() {
-    # Генерирует строку параметров HTB класса на основе конфигурации
-    # Использование: _tl_generate_htb_class_cmd "download|upload" "$RATE_LIMIT"
-    local direction="$1"  # download | upload
-    local rate="$2"       # Например: 5mbit
-    
-    local cmd="htb rate \"$rate\""
-    
-    if [[ "$direction" == "download" ]]; then
-        # Download параметры
-        if [[ "$TL_DL_RATE_MODE" == "strict" ]]; then
-            cmd+=" ceil \"$rate\""
-        else
-            # Гибкий режим: можно задать ceil больше rate
-            cmd+=" ceil \"${TL_DL_CEIL:-$rate}\""
-        fi
-        
-        [[ -n "$TL_DL_BURST" ]] && cmd+=" burst $TL_DL_BURST"
-        [[ -n "$TL_DL_CBURST" ]] && cmd+=" cburst $TL_DL_CBURST"
-        [[ -n "$TL_DL_QUANTUM" ]] && cmd+=" quantum $TL_DL_QUANTUM"
-        
-    elif [[ "$direction" == "upload" ]]; then
-        # Upload параметры
-        if [[ "$TL_UL_RATE_MODE" == "strict" ]]; then
-            cmd+=" ceil \"$rate\""
-        else
-            cmd+=" ceil \"${TL_UL_CEIL:-$rate}\""
-        fi
-        
-        [[ -n "$TL_UL_BURST" ]] && cmd+=" burst $TL_UL_BURST"
-        [[ -n "$TL_UL_CBURST" ]] && cmd+=" cburst $TL_UL_CBURST"
-        [[ -n "$TL_UL_QUANTUM" ]] && cmd+=" quantum $TL_UL_QUANTUM"
-    fi
-    
-    echo "$cmd"
-}
-
-_tl_generate_sfq_cmd() {
-    # Генерирует параметры SFQ
-    local cmd="sfq"
-    [[ -n "$TL_SFQ_PERTURB" ]] && cmd+=" perturb $TL_SFQ_PERTURB"
-    [[ -n "$TL_SFQ_LIMIT" ]] && cmd+=" limit $TL_SFQ_LIMIT"
-    echo "$cmd"
-}
-
+readonly TL_MODULE_VERSION="3.1 (eBPF)"
+readonly TL_CONFIG_DIR="/etc/reshala/traffic_limiter"
+readonly TL_BPF_SRC_PATH="${SCRIPT_DIR}/modules/local/shaper.bpf.c"
+readonly TL_BPF_OBJ_PATH="${TL_CONFIG_DIR}/shaper.bpf.o"
+readonly TL_CTRL_PY_PATH="${SCRIPT_DIR}/modules/local/reshala_ctrl.py"
+readonly TL_SERVICE_NAME="reshala-traffic-limiter.service"
+readonly TL_SERVICE_PATH="/etc/systemd/system/${TL_SERVICE_NAME}"
+readonly TL_OLD_APPLY_SCRIPT="/usr/local/bin/reshala-traffic-limiter-apply.sh"
 
 # ============================================================ #
 # ==                      ГЛАВНОЕ МЕНЮ                      == #
 # ============================================================ #
 
 show_traffic_limiter_menu() {
-    ensure_package "tc" "iproute2"
-    
-    # 1. Автоматическое лечение старых конфигов
-    _tl_auto_repair_configs
+    local kernel_ver; kernel_ver=$(uname -r | cut -d. -f1,2)
+    if (( $(echo "$kernel_ver < 5.4" | bc -l) )); then
+        clear; menu_header "🚦 Шейпер трафика (eBPF)"
+        printf_critical_warning "ОШИБКА: Твое ядро ($kernel_ver) слишком старое для eBPF шейпера (нужно 5.4+)."
+        wait_for_enter; return
+    fi
 
     enable_graceful_ctrlc
     while true; do
-        clear
-        menu_header "🚦 Шейпер трафика (Персональные лимиты) v${TL_MODULE_VERSION}"
-        printf_description "Этот модуль создает персональный лимит скорости для КАЖДОГО пользователя."
-        echo
+        clear; menu_header "🚦 Шейпер трафика (eBPF + EDT) v${TL_MODULE_VERSION}"
+        local is_active="false"; if systemctl is-active --quiet ${TL_SERVICE_NAME}; then is_active="true"; fi
+        local status_icon="${C_GRAY}[∅ Не настроен]${C_RESET}"
+        if [[ "$is_active" == "true" ]]; then status_icon="${C_GREEN}[✓ Работает: eBPF активен]${C_RESET}"; fi
 
-        # Проверка статуса: смотрим и на сервис, и на наличие файлов
-        local is_active="false"
-        if systemctl is-active --quiet ${TL_SERVICE_NAME}; then is_active="true"; fi
-        
-        local config_count
-        config_count=$(find "${TL_CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f 2>/dev/null | wc -l)
-
-        # === ПРОВЕРКА АКТУАЛЬНОСТИ (ДЛЯ ИНДИКАТОРА В МЕНЮ) ===
-        local outdated_count=0
-        if [[ "$config_count" -gt 0 ]]; then
-            # Получаем результат проверки
-            local check_result
-            check_result=$(_tl_check_rules_version 2>/dev/null)
-            local check_exit_code=$?
-            
-            # Если функция вернула число, используем его
-            if [[ -n "$check_result" && "$check_result" =~ ^[0-9]+$ ]]; then
-                outdated_count="$check_result"
-            # Если функция вернула код ошибки 1 (есть устаревшие)
-            elif [[ "$check_exit_code" -eq 1 ]]; then
-                # Пересчитываем вручную
-                outdated_count=$(find "${TL_CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f 2>/dev/null | wc -l)
-            fi
-        fi
-
-        local status_icon
-        local update_indicator=""
-
-        # Если есть устаревшие правила - добавляем красный индикатор
-        if [[ "$outdated_count" -gt 0 ]]; then
-            update_indicator=" ${C_RED}🔴${C_RESET}"
-        fi
-
-        if [[ "$is_active" == "true" && "$config_count" -gt 0 ]]; then
-            status_icon="${C_GREEN}[✓ Работает: $config_count портов]${C_RESET}${update_indicator}"
-        elif [[ "$config_count" -gt 0 ]]; then
-            status_icon="${C_YELLOW}[⚠ Конфиги есть, сервис стоит]${C_RESET}${update_indicator}"
-        else
-            status_icon="${C_GRAY}[∅ Не настроен]${C_RESET}"
-        fi
-        
-        printf_menu_option "1" "📊 Текущий статус (Топ-5) ${status_icon}"
-        printf_description "Показывает активные правила и топ потребителей."
-        printf_menu_option "2" "➕ Добавить/изменить лимит"
-        printf_description "Запускает мастер настройки для порта."
-        printf_menu_option "3" "➖ Удалить лимит(ы)"
-        printf_description "Позволяет выбрать и удалить один или все лимиты."
+        printf_menu_option "1" "📊 Текущий статус (Топ-IP) ${status_icon}"
+        printf_menu_option "2" "➕ Настроить лимиты (eBPF)"
+        printf_menu_option "3" "🧹 Полная очистка системы"
         printf_menu_option "4" "📜 Посмотреть лог сервиса"
-        printf_description "Показывает системный журнал для службы шейпера."
-        printf_menu_option "5" "📈 Мониторинг трафика (iftop)"
-        printf_description "Запуск утилиты iftop для просмотра текущей скорости."
-        printf_menu_option "6" "🔄 Перезагрузить (Сброс статы)"
-        printf_description "Перезапуск сервиса обнуляет счетчики трафика."
-        printf_menu_option "7" "💾 Бэкап / Восстановление"
-        printf_description "Сохранение и восстановление конфигурации."
-        
+        printf_menu_option "5" "🔄 Перезапустить движок"
+        printf_menu_option "6" "📈 Мониторинг (iftop)"
         echo; printf_menu_option "b" "🔙 Назад"; print_separator "-" 60
 
         local choice; choice=$(safe_read "Твой выбор") || break
         if [[ "$choice" == "b" || "$choice" == "B" ]]; then break; fi
-        
         case "$choice" in
             1) _tl_show_status ;; 
-            2) _tl_apply_limit_wizard ;; 
-            3) _show_delete_submenu ;; 
+            2) _tl_apply_limit_ebpf_wizard ;; 
+            3) _tl_complete_cleanup_wizard ;; 
             4) _tl_view_service_log ;; 
-            5) _tl_monitor_traffic ;;
-            6) _tl_restart_service ;;
-            7) _tl_backup_menu ;; 
+            5) _tl_restart_ebpf_engine ;;
+            6) _tl_monitor_traffic ;;
             *) warn "Нет такого пункта." ;; 
         esac
         wait_for_enter
-    done
-    disable_graceful_ctrlc
-}
-
-_show_delete_submenu() {
-    enable_graceful_ctrlc
-    while true; do
-        clear; menu_header "Удаление лимитов"; printf_description "Выбери, как именно ты хочешь снести правила."
-        echo; render_menu_items "traffic_limiter_delete"
-        echo; printf_menu_option "b" "🔙 Назад"; print_separator "-" 60
-        local choice; choice=$(safe_read "Твой выбор") || break
-        if [[ "$choice" == "b" || "$choice" == "B" ]]; then break; fi
-        local action; action=$(get_menu_action "traffic_limiter_delete" "$choice")
-        if [[ -n "$action" ]]; then 
-            eval "$action"
-            wait_for_enter
-        else 
-            err "Нет такого пункта."
-        fi
     done
     disable_graceful_ctrlc
 }
@@ -442,858 +84,184 @@ _show_delete_submenu() {
 # ==                  ЛОГИКА И ПОДМЕНЮ                      == #
 # ============================================================ #
 
-_tl_backup_menu() {
-    while true; do
-        clear; menu_header "Бэкап и Восстановление"
-        printf_description "Папка бэкапов: ${C_GRAY}${TL_BACKUP_DIR}${C_RESET}"
-        echo
-        printf_menu_option "1" "💾 Создать бэкап текущих настроек"
-        printf_menu_option "2" "📥 Восстановить из бэкапа"
-        echo; printf_menu_option "b" "🔙 Назад"; print_separator "-" 60
-        
-        local choice; choice=$(safe_read "Твой выбор") || return
-        if [[ "$choice" == "b" || "$choice" == "B" ]]; then return; fi
-        
-        case "$choice" in
-            1)
-                run_cmd mkdir -p "$TL_BACKUP_DIR"
-                local filename="backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-                if run_cmd tar -czf "${TL_BACKUP_DIR}/${filename}" -C "${TL_CONFIG_DIR}" .; then
-                    ok "Бэкап создан: ${filename}"
-                else
-                    err "Ошибка создания бэкапа."
-                fi
-                wait_for_enter
-                ;;
-            2)
-                local backups=($(ls "${TL_BACKUP_DIR}"/*.tar.gz 2>/dev/null))
-                if [[ ${#backups[@]} -eq 0 ]]; then
-                    warn "Бэкапов не найдено."
-                else
-                    local b_choice; b_choice=$(ask_selection "Выберите бэкап:" "${backups[@]}") || continue
-                    local selected_backup="${backups[$((b_choice-1))]}"
-                    
-                    if ask_yes_no "Это ЗАМЕНИТ все текущие настройки. Продолжить?" ; then
-                        run_cmd rm -rf "${TL_CONFIG_DIR:?}"/*
-                        run_cmd tar -xzf "$selected_backup" -C "$TL_CONFIG_DIR"
-                        ok "Настройки восстановлены. Перезапускаю сервис..."
-                        _tl_restart_service
-                    fi
-                fi
-                wait_for_enter
-                ;;
-        esac
+_tl_ensure_ebpf_deps() {
+    info "Проверка зависимостей для eBPF..."
+    ensure_dependencies "clang" "llvm" "libbpf-dev" "bpftool" "python3" "bc" "kmod"
+    local kheaders="linux-headers-$(uname -r)"
+    if ! dpkg -s "$kheaders" &>/dev/null; then
+        info "Устанавливаю заголовки ядра $kheaders..."
+        apt-get update && apt-get install -y "$kheaders"
+    fi
+}
+
+_tl_compile_bpf() {
+    info "Компиляция eBPF программы..."
+    mkdir -p "${TL_CONFIG_DIR}"
+    
+    # Автоматический поиск путей для asm/types.h
+    local arch_include=""
+    local possible_paths=(
+        "/usr/include/$(uname -m)-linux-gnu"
+        "/usr/include/aarch64-linux-gnu"
+        "/usr/include/x86_64-linux-gnu"
+        "/usr/include/arm-linux-gnueabihf"
+    )
+    
+    for path in "${possible_paths[@]}"; do
+        if [[ -d "$path/asm" ]]; then
+            arch_include="-I$path"
+            break
+        fi
     done
-}
 
-_tl_restart_service() {
-    # Принудительно пересоздаем скрипт применения перед рестартом
-    _tl_ensure_service_installed
-    
-    info "Перезапускаю сервис шейпера..."
-    run_cmd systemctl restart "${TL_SERVICE_NAME}"
-    if systemctl is-active --quiet "${TL_SERVICE_NAME}"; then
-        ok "Сервис перезапущен. Статистика сброшена."
-    else
-        err "Ошибка при перезапуске."
-    fi
-}
-
-_tl_monitor_traffic() {
-    ensure_package "iftop"
-    clear
-    menu_header "Мониторинг трафика (iftop)"
-    
-    printf_description "Выбери интерфейс для прослушивания:"
-    local iface; iface=$(_tl_select_interface) || return
-
-    info "Запускаю iftop на интерфейсе ${C_CYAN}${iface}${C_RESET}..."
-    info "Нажми ${C_BOLD}q${C_RESET}, чтобы выйти из iftop."
-    sleep 1
-    
-    run_cmd iftop -n -i "$iface"
-}
-
-_tl_auto_repair_configs() {
-    if [[ ! -d "${TL_CONFIG_DIR}" ]]; then mkdir -p "${TL_CONFIG_DIR}"; return; fi
-    local repaired=0
-    while IFS= read -r file; do
-        local changed=0
-        if ! grep -q "MAX_USERS=" "$file"; then echo 'MAX_USERS="256"' >> "$file"; changed=1; fi
-        if ! grep -q "TYPE=" "$file"; then echo 'TYPE="u32-hash"' >> "$file"; changed=1; fi
-        if ! grep -q "TOTAL_LIMIT=" "$file"; then echo 'TOTAL_LIMIT="10000mbit"' >> "$file"; changed=1; fi
-        
-        if [[ "$changed" -eq 1 ]]; then ((repaired++)); fi
-    done < <(find "${TL_CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f)
-    if [[ "$repaired" -gt 0 ]]; then debug_log "Auto-repaired $repaired config files."; fi
-}
-
-_tl_apply_limit_wizard() {
-    clear; menu_header "Шаг 1: Выбор сетевого интерфейса"
-    printf_description "Выбери основной сетевой интерфейс (обычно ${C_YELLOW}eth0${C_RESET} или ${C_YELLOW}ens...${C_RESET})"
-    local iface; iface=$(_tl_select_interface) || { return; }
-
-    clear; menu_header "Шаг 2: Выбор порта"
-    _tl_show_listening_ports_smart; echo
-    
-    local port_choice; port_choice=$(safe_read "Введи порт для ограничения (можно ввести вручную, даже если его нет в списке)" "") || return
-    local port;
-    if [[ "$port_choice" =~ ^[0-9]+$ ]] && [ "$port_choice" -ge 1 ] && [ "$port_choice" -le 65535 ]; then
-        port="$port_choice"
-    else
-        err "Неверный формат порта. Введи число от 1 до 65535."
-        wait_for_enter
-        return
-    fi
-
-    if [[ -f "${TL_CONFIG_DIR}/port-${port}.conf" ]]; then
-        printf_critical_warning "ВНИМАНИЕ: Для порта ${port} уже настроен лимит!"
-        if ! ask_yes_no "Хочешь ПЕРЕЗАПИСАТЬ существующие настройки? (y/n)" "n"; then warn "Операция отменена."; return; fi
-    fi
-
-    clear; menu_header "Шаг 3: Лимит на ПОЛЬЗОВАТЕЛЯ"
-    local down_rate_num; down_rate_num=$(ask_number_in_range "Лимит СКАЧИВАНИЯ на юзера (Мбит/с)" 1 10000 "${TL_DEFAULT_DOWN_RATE}") || return
-    local up_rate_num; up_rate_num=$(ask_number_in_range "Лимит ЗАГРУЗКИ на юзера (Мбит/с)" 1 10000 "${TL_DEFAULT_UP_RATE}") || return
-
-    clear; menu_header "Шаг 4: Общий лимит на ПОРТ"
-    printf_description "Максимальная скорость, которую могут занять ВСЕ юзеры вместе взятые."
-    printf_description "Оставь пустым или введи 0, чтобы не ограничивать (будет 10 Гбит)."
-    local total_rate_num; total_rate_num=$(safe_read "Общий лимит (Мбит/с) [безлимит]" "")
-    
-    local total_limit="10000mbit"
-    if [[ "$total_rate_num" =~ ^[0-9]+$ ]] && [ "$total_rate_num" -gt 0 ]; then
-        total_limit="${total_rate_num}mbit"
-    fi
-
-    local down_limit="${down_rate_num}mbit"; local up_limit="${up_rate_num}mbit"
-
-    clear; menu_header "Подтверждение настроек"; 
-    print_key_value "Интерфейс" "${C_CYAN}${iface}${C_RESET}" 28; 
-    print_key_value "Порт" "${C_CYAN}${port}${C_RESET}" 28; 
-    print_key_value "Лимит DL (User)" "${C_GREEN}${down_limit}${C_RESET}" 28; 
-    print_key_value "Лимит UL (User)" "${C_YELLOW}${up_limit}${C_RESET}" 28; 
-    print_key_value "Лимит ПОРТА (Total)" "${C_RED}${total_limit}${C_RESET}" 28; 
-    print_key_value "Макс. активных юзеров" "${C_CYAN}${TL_MAX_BUCKETS}${C_RESET}" 28;
-    echo
-    if ! ask_yes_no "Применить эти настройки? (y/n)" "n"; then warn "Операция отменена."; return; fi
-
-    info "Создаю конфигурацию..."; run_cmd mkdir -p "${TL_CONFIG_DIR}"
-    cat << EOF | run_cmd tee "${TL_CONFIG_DIR}/port-${port}.conf" > /dev/null
-IFACE="${iface}"
-PORT="${port}"
-DOWN_LIMIT="${down_limit}"
-UP_LIMIT="${up_limit}"
-TOTAL_LIMIT="${total_limit}"
-MAX_USERS="${TL_MAX_BUCKETS}"
-TYPE="u32-hash"
-CONFIG_VERSION="${TL_CONFIG_VERSION}"
-APPLIED_DL_PARAMS="${TL_DL_PARAMS_SIGNATURE}"
-APPLIED_UL_PARAMS="${TL_UL_PARAMS_SIGNATURE}"
-EOF
-    info "Устанавливаю и запускаю сервис..."; _tl_ensure_service_installed; run_cmd systemctl restart "${TL_SERVICE_NAME}"
-    
-    sleep 2 # Даем время на запуск
-    if systemctl is-active --quiet "${TL_SERVICE_NAME}"; then 
-        ok "Лимит для порта ${port} успешно применён!"
-    else 
-        err "Не удалось запустить сервис. Проверь 'journalctl -u ${TL_SERVICE_NAME}'"
-        if ask_yes_no "Показать системный журнал для сервиса? (y/n)" "y"; then
-            _tl_view_service_log
-        fi
-    fi
-}
-
-_tl_clear_one_limit() {
-    if ! ls -A "${TL_CONFIG_DIR}"/*.conf >/dev/null 2>&1; then warn "Активных лимитов не найдено."; return; fi
-    clear; menu_header "Удаление конкретного лимита"
-    local options=(); local files=(); while IFS= read -r file; do if [[ -f "$file" ]]; then source "$file"; options+=("Порт ${PORT} (${DOWN_LIMIT}/${UP_LIMIT}) на ${IFACE}"); files+=("$file"); fi; done < <(find "${TL_CONFIG_DIR}" -name "port-*.conf")
-    local choice; choice=$(ask_selection "Активные лимиты:" "${options[@]}") || return
-    local file_to_delete="${files[$((choice-1))]}"
-    if ! ask_yes_no "Точно снести этот лимит? (y/n)" "n"; then warn "Отмена."; return; fi
-    info "Удаляю конфигурацию..."; run_cmd rm -f "$file_to_delete"; run_cmd systemctl restart "${TL_SERVICE_NAME}"; ok "Лимит удалён."
-}
-
-_tl_clear_all_limits() {
-    if ! ls -A "${TL_CONFIG_DIR}"/*.conf >/dev/null 2>&1; then warn "Активных лимитов нет."; return; fi
-    if ! ask_yes_no "Точно снести ВСЕ настроенные лимиты?"; then warn "Отмена."; return; fi
-    info "Полностью вычищаю все конфиги и правила..."; _tl_uninstall_service; ok "Все ограничения сняты."
-}
-
-# ============================================================ #
-# ==          ПРОВЕРКА АКТУАЛЬНОСТИ ПРАВИЛ                  == #
-# ============================================================ #
-
-_tl_check_rules_version() {
-    # Возвращает: 0 - все актуально, 1 - нужно обновление
-    local CURRENT_VERSION="${TL_CONFIG_VERSION}"
-    local EXPECTED_DL_PARAMS="${TL_DL_PARAMS_SIGNATURE}"
-    local EXPECTED_UL_PARAMS="${TL_UL_PARAMS_SIGNATURE}"
-    
-    local outdated_count=0
-    local total_count=0
-    local outdated_ports=()
-    
-    while IFS= read -r file; do
-        if [[ -f "$file" ]]; then
-            source "$file"
-            ((total_count++))
-            
-            local config_version="${CONFIG_VERSION:-1}"
-            
-            # Проверка версии конфига
-            if [[ "$config_version" -lt "$CURRENT_VERSION" ]]; then
-                ((outdated_count++))
-                outdated_ports+=("$PORT")
-                continue
-            fi
-            
-            # Проверка параметров (если версия совпадает, но параметры изменились)
-            if [[ "${APPLIED_DL_PARAMS:-}" != "$EXPECTED_DL_PARAMS" ]] || \
-               [[ "${APPLIED_UL_PARAMS:-}" != "$EXPECTED_UL_PARAMS" ]]; then
-                ((outdated_count++))
-                outdated_ports+=("$PORT")
-            fi
-        fi
-    done < <(find "${TL_CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f 2>/dev/null)
-    
-    if [[ "$outdated_count" -gt 0 ]]; then
-        echo "$outdated_count"
+    if ! clang -O2 -target bpf ${arch_include} -c "${TL_BPF_SRC_PATH}" -o "${TL_BPF_OBJ_PATH}"; then
+        err "Ошибка компиляции eBPF! Проверь наличие заголовков ядра."
         return 1
-    else
-        return 0
     fi
+    ok "Компиляция завершена успешно."
+    return 0
 }
 
-_tl_upgrade_rules_auto() {
-    clear
-    menu_header "Автоматическое обновление правил → v${TL_CONFIG_VERSION}"
-    
-    info "Обнаружены устаревшие правила:"
-    echo
-    _tl_get_outdated_details | while read -r line; do
-        printf "  ${C_YELLOW}⚠${C_RESET} %s\n" "$line"
+_tl_cleanup_old_system() {
+    info "🧹 Очистка старых правил..."
+    systemctl stop "${TL_SERVICE_NAME}" &>/dev/null || true
+    systemctl disable "${TL_SERVICE_NAME}" &>/dev/null || true
+    rm -f "${TL_SERVICE_PATH}" "${TL_OLD_APPLY_SCRIPT}"
+    systemctl daemon-reload
+    ip -o link show up | awk -F': ' '{print $2}' | grep -v '^lo$' | while read -r iface; do
+        tc qdisc del dev "$iface" root &>/dev/null || true
+        tc qdisc del dev "$iface" clsact &>/dev/null || true
+        tc qdisc del dev "$iface" ingress &>/dev/null || true
     done
-    echo
-    
-    printf_description "Будут применены новые параметры:"
-    _tl_print_upgrade_preview
-    echo
-    
-    if ! ask_yes_no "Обновить все правила автоматически? (y/n)" "n"; then
-        warn "Обновление отменено."
-        return
-    fi
-    
-    local updated=0
-    local failed=0
-    
-    info "Обновляю конфигурации..."
-    while IFS= read -r file; do
-        if [[ -f "$file" ]]; then
-            source "$file"
-            
-            # Обновление версии
-            if grep -q "CONFIG_VERSION=" "$file"; then
-                sed -i "s|^CONFIG_VERSION=.*|CONFIG_VERSION=\"${TL_CONFIG_VERSION}\"|" "$file"
-            else
-                echo "CONFIG_VERSION=\"${TL_CONFIG_VERSION}\"" >> "$file"
-            fi
-            
-            # Обновление параметров DOWNLOAD
-            if grep -q "APPLIED_DL_PARAMS=" "$file"; then
-                sed -i "s|^APPLIED_DL_PARAMS=.*|APPLIED_DL_PARAMS=\"${TL_DL_PARAMS_SIGNATURE}\"|" "$file"
-            else
-                echo "APPLIED_DL_PARAMS=\"${TL_DL_PARAMS_SIGNATURE}\"" >> "$file"
-            fi
-            
-            # Обновление параметров UPLOAD
-            if grep -q "APPLIED_UL_PARAMS=" "$file"; then
-                sed -i "s|^APPLIED_UL_PARAMS=.*|APPLIED_UL_PARAMS=\"${TL_UL_PARAMS_SIGNATURE}\"|" "$file"
-            else
-                echo "APPLIED_UL_PARAMS=\"${TL_UL_PARAMS_SIGNATURE}\"" >> "$file"
-            fi
-            
-            ((updated++))
-            ok "Обновлён конфиг для порта ${PORT}"
-        fi
-    done < <(find "${TL_CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f 2>/dev/null)
-    
-    echo
-    info "Применяю новые правила..."
-    if run_cmd systemctl restart "${TL_SERVICE_NAME}"; then
-        ok "Обновлено правил: ${updated}"
-        ok "Сервис перезапущен успешно"
-    else
-        err "Ошибка при перезапуске сервиса"
-        ((failed++))
-    fi
-    
-    if [[ "$failed" -eq 0 ]]; then
-        ok "Все правила успешно обновлены до версии ${TL_CONFIG_VERSION}!"
-    else
-        warn "Обновление завершено с ошибками"
-    fi
+    modprobe -r ifb &>/dev/null || true
+    ok "Очистка завершена."
 }
-
-_tl_print_upgrade_preview() {
-    # Генерирует preview параметров для сообщения об обновлении
-    local dl_example="htb rate \$LIMIT"
-    [[ "$TL_DL_RATE_MODE" == "strict" ]] && dl_example+=" ceil \$LIMIT"
-    [[ -n "$TL_DL_BURST" ]] && dl_example+=" burst $TL_DL_BURST"
-    [[ -n "$TL_DL_CBURST" ]] && dl_example+=" cburst $TL_DL_CBURST"
-    [[ -n "$TL_DL_QUANTUM" ]] && dl_example+=" quantum $TL_DL_QUANTUM"
-    
-    local ul_example="htb rate \$LIMIT"
-    [[ "$TL_UL_RATE_MODE" == "strict" ]] && ul_example+=" ceil \$LIMIT"
-    [[ -n "$TL_UL_BURST" ]] && ul_example+=" burst $TL_UL_BURST"
-    [[ -n "$TL_UL_CBURST" ]] && ul_example+=" cburst $TL_UL_CBURST"
-    [[ -n "$TL_UL_QUANTUM" ]] && ul_example+=" quantum $TL_UL_QUANTUM"
-    
-    printf "  ${C_GREEN}• Download:${C_RESET} %s\n" "$dl_example"
-    printf "  ${C_YELLOW}• Upload:${C_RESET}   %s\n" "$ul_example"
-}
-
-_tl_get_outdated_details() {
-    # Возвращает список устаревших портов с причинами
-    local CURRENT_VERSION="${TL_CONFIG_VERSION}"
-    local EXPECTED_DL_PARAMS="${TL_DL_PARAMS_SIGNATURE}"
-    local EXPECTED_UL_PARAMS="${TL_UL_PARAMS_SIGNATURE}"
-    
-    while IFS= read -r file; do
-        if [[ -f "$file" ]]; then
-            source "$file"
-            local config_version="${CONFIG_VERSION:-1}"
-            local reason=""
-            
-            if [[ "$config_version" -lt "$CURRENT_VERSION" ]]; then
-                reason="версия конфига устарела (v${config_version} → v${CURRENT_VERSION})"
-            elif [[ "${APPLIED_DL_PARAMS:-}" != "$EXPECTED_DL_PARAMS" ]]; then
-                reason="изменились параметры HTB Download"
-            elif [[ "${APPLIED_UL_PARAMS:-}" != "$EXPECTED_UL_PARAMS" ]]; then
-                reason="изменились параметры HTB Upload"
-            fi
-            
-            if [[ -n "$reason" ]]; then
-                echo "Порт ${PORT}: ${reason}"
-            fi
-        fi
-    done < <(find "${TL_CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f 2>/dev/null)
-}
-
-_tl_show_status() {
-    clear
-    menu_header "Статус шейпера трафика (Config v${TL_CONFIG_VERSION})"
-    
-    local config_count
-    config_count=$(find "${TL_CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f 2>/dev/null | wc -l)
-
-    if [[ "$config_count" -eq 0 ]]; then 
-        warn "Шейпер не настроен (нет конфигурационных файлов)."
-        return
-    fi
-
-    # === ПРОВЕРКА АКТУАЛЬНОСТИ ПРАВИЛ ===
-    local outdated_count
-    outdated_count=$(_tl_check_rules_version) || true
-    
-    if [[ -n "$outdated_count" && "$outdated_count" -gt 0 ]]; then
-        printf "${C_RED}┌─────────────────────────────────────────────────────────┐${C_RESET}\n"
-        printf "${C_RED}│  ⚠️  ДОСТУПНО ОБНОВЛЕНИЕ ПРАВИЛ TC (${outdated_count} портов)        │${C_RESET}\n"
-        printf "${C_RED}│  Нажми '${C_BOLD}u${C_RESET}${C_RED}' для автоматического обновления            │${C_RESET}\n"
-        printf "${C_RED}└─────────────────────────────────────────────────────────┘${C_RESET}\n"
-        echo
-    fi
-
-    local is_active; is_active=$(systemctl is-active --quiet ${TL_SERVICE_NAME} && echo "true" || echo "false")
-    
-    local status_str
-    if [[ "$is_active" == "true" ]]; then
-        status_str="${C_GREEN}АКТИВЕН${C_RESET}"
-    else
-        status_str="${C_RED}НЕ АКТИВЕН${C_RESET}"
-    fi
-    print_key_value "Сервис systemd" "$status_str" 20
-    echo
-
-    print_section_title "АКТИВНЫЕ ЛИМИТЫ"
-    local port_idx=1
-    while IFS= read -r file; do 
-        if [[ -f "$file" ]]; then 
-            source "$file"
-            
-            # Индикатор устаревшего конфига
-            local outdated_mark=""
-            local config_version="${CONFIG_VERSION:-1}"
-            if [[ "$config_version" -lt "${TL_CONFIG_VERSION}" ]] || \
-               [[ "${APPLIED_DL_PARAMS:-}" != "${TL_DL_PARAMS_SIGNATURE}" ]] || \
-               [[ "${APPLIED_UL_PARAMS:-}" != "${TL_UL_PARAMS_SIGNATURE}" ]]; then
-                outdated_mark=" ${C_RED}[v${config_version} → устарел]${C_RESET}"
-            fi
-            
-            printf "  - Порт ${C_YELLOW}%-5s${C_RESET}: ${C_GREEN}%-8s${C_RESET} DL / ${C_YELLOW}%-8s${C_RESET} UL на ${C_CYAN}%s${C_RESET}%s\n" \
-                "$PORT" "$DOWN_LIMIT" "$UP_LIMIT" "$IFACE" "$outdated_mark"
-            
-            if [[ "${TOTAL_LIMIT:-10000mbit}" != "10000mbit" ]]; then
-                printf "    ${C_RED}⚠ Общий лимит порта: %s${C_RESET}\n" "$TOTAL_LIMIT"
-            fi
-            
-            if [[ "$is_active" == "true" ]]; then
-                local dl_parent_class="1:$(printf "%x" $((port_idx * 16)))"
-                
-                local stats
-                stats=$(tc -s class show dev "$IFACE" | grep -A 1 "class htb ${dl_parent_class} " | grep "Sent")
-                if [[ -n "$stats" ]]; then
-                    local rus_stats
-                    rus_stats=$(echo "$stats" | awk '{
-                        bytes=$2; pkts=$4; dropped=$7;
-                        gsub(/,/, "", dropped);
-                        printf "Отправлено: %s байт, Пакетов: %s, Потерь: %s", bytes, pkts, dropped
-                    }')
-                    printf "    ↳ ${C_GRAY}Всего: %s${C_RESET}\n" "$rus_stats"
-                else
-                    printf "    ↳ ${C_GRAY}(нет данных о трафике)${C_RESET}\n"
-                fi
-
-                printf "    ↳ ${C_BOLD}Топ-5 активных потоков (Buckets):${C_RESET}\n"
-                
-                local top_users
-                top_users=$(tc -s class show dev "$IFACE" | \
-                    awk -v parent="${dl_parent_class}" ' 
-                        $1=="class" && $2=="htb" && $4=="parent" && $5==parent {
-                            current_id=$3
-                        }
-                        $1=="Sent" && current_id!="" {
-                            print current_id, $2
-                            current_id=""
-                        }
-                    ' | sort -k2 -nr | head -n 5)
-                
-                if [[ -n "$top_users" ]]; then
-                    while read -r class_id bytes; do
-                        local human_bytes
-                        human_bytes=$(numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || echo "${bytes} B")
-                        printf "      • Поток ${C_CYAN}%-8s${C_RESET}: ${C_YELLOW}%s${C_RESET}\n" "$class_id" "$human_bytes"
-                    done <<< "$top_users"
-                else
-                    printf "      ${C_GRAY}(нет активных пользователей)${C_RESET}\n"
-                fi
-            fi
-            echo ""
-            ((port_idx++))
-        fi
-    done < <(find "${TL_CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f | sort)
-    
-    # === ОБРАБОТКА КОМАНД ===
-    echo
-    if [[ -n "$outdated_count" && "$outdated_count" -gt 0 ]]; then
-        printf_description "Нажми ${C_BOLD}u${C_RESET} для обновления правил, ${C_BOLD}Enter${C_RESET} для возврата"
-        local user_choice; user_choice=$(safe_read "" "") || return
-        
-        if [[ "$user_choice" == "u" || "$user_choice" == "U" ]]; then
-            _tl_upgrade_rules_auto
-            wait_for_enter
-            _tl_show_status  # Рекурсивно показать обновлённый статус
-        fi
-    else
-        if [[ "$is_active" == "false" ]]; then 
-            if ask_yes_no "Сервис не запущен, хотя конфиги есть! Попробовать перезапустить? (y/n)" "n"; then 
-                _tl_restart_service
-            fi
-        fi
-    fi
-}
-
-_tl_view_service_log() {
-    if ! [[ -f "${TL_SERVICE_PATH}" ]]; then
-        warn "Сервис шейпера не установлен. Лог пуст."
-        return
-    fi
-    info "Смотрю лог для ${TL_SERVICE_NAME}... (Нажми 'q' для выхода)"
-    echo
-    journalctl -u ${TL_SERVICE_NAME} --no-pager -n 50
-}
-
-_tl_handle_legacy_cleanup() { 
-    clear; menu_header "Обнаружена старая версия шейпера"
-    if ! ask_yes_no "Рекомендуется провести полную зачистку старой версии. Сделать это сейчас? (y/n)"; then 
-        err "Очистка отменена."; wait_for_enter; return
-    fi
-    info "Начинаю зачистку..."
-    run_cmd systemctl disable --now "${TL_SERVICE_NAME}" 2>/dev/null || true
-    run_cmd rm -f "${TL_SERVICE_PATH}" "/usr/local/bin/reshala-traffic-limiter.sh"
-    run_cmd systemctl daemon-reload
-    
-    local ifaces; ifaces=$(ip -o link show up | awk -F': ' '{print $2}' | grep -v '^lo$')
-    for iface in $ifaces; do 
-        run_cmd tc qdisc del dev "$iface" root 2>/dev/null || true
-        run_cmd tc qdisc del dev "$iface" ingress 2>/dev/null || true
-    done
-    run_cmd tc qdisc del dev ifb0 root 2>/dev/null || true
-    
-    ok "Старая версия удалена."
-    wait_for_enter
-}
-
-_tl_select_interface() { local interfaces; mapfile -t interfaces < <(ip -o link show up | awk -F': ' '{print $2}' | grep -v '^lo$'); if [[ ${#interfaces[@]} -eq 0 ]]; then err "Нет активных сетевых интерфейсов."; return 1; fi; >&2 info "Доступные интерфейсы:"; local i=1; for iface_name in "${interfaces[@]}"; do >&2 printf "   [%d] %s\n" "$i" "$iface_name"; ((i++)); done; local choice; choice=$(ask_number_in_range "Выбери номер" 1 ${#interfaces[@]}) || return 1; echo "${interfaces[$((choice-1))]}"; }
 
 _tl_show_listening_ports_smart() {
-    ensure_package "ss" "iproute2"
-    info "Сканирую открытые TCP порты..."
-    local temp_file; temp_file=$(mktemp)
-    
-    while read -r line; do
-        local listen_addr; listen_addr=$(echo "$line" | awk '{print $4}')
-        local process_info; process_info=$(echo "$line" | awk '{$1=$2=$3=$4=$5=""; print $0}' | xargs)
-        local port; port=$(echo "$listen_addr" | awk -F: '{print $NF}')
-        [[ "$port" =~ ^[0-9]+$ ]] || continue
-        
-        local bind_addr_full
-        bind_addr_full=$(echo "$listen_addr" | sed 's/:[^:]*$//')
-        local bind_addr
-        bind_addr=$(echo "$bind_addr_full" | sed 's/[[//g; s/]//g; s/%.*//' | xargs)
-        
-        local type_str="SPECIFIC"; local sort_key=3
-        if [[ "$bind_addr" == "127.0.0.1" || "$bind_addr" == "::1" || "$bind_addr" == "localhost" || "$bind_addr" =~ ^127\.0\.0\.[0-9]+$ ]]; then
-            type_str="${C_YELLOW}LOCAL${C_RESET}"; sort_key=3
-        elif [[ "$bind_addr" == "*" || "$bind_addr" == "0.0.0.0" || "$bind_addr" == "::" ]]; then
-            type_str="${C_GREEN}EXTERNAL${C_RESET}"; sort_key=2
-        else
-             type_str="${C_CYAN}SPECIFIC (${bind_addr})${C_RESET}"; sort_key=3
-        fi
-        local proc_str="N/A"
-        if [[ "$process_info" == *"docker-proxy"* ]]; then
-            proc_str="${C_BLUE}🐳 Docker${C_RESET}"
-        elif [[ "$process_info" == *"users"* ]]; then
-            proc_str=$(echo "$process_info" | grep -oP '(?<=").+?(?=",)' | head -1)
-            if [[ "$proc_str" == "xray" && "$sort_key" == "2" ]]; then sort_key="1"; fi
-        fi
-        local shaper_mark=""
-        if [[ -f "${TL_CONFIG_DIR}/port-${port}.conf" ]]; then shaper_mark="${C_RED}ДА${C_RESET}"; fi
-        printf "%s|%s|%s|%s|%s\n" "$sort_key" "$port" "$type_str" "$proc_str" "$shaper_mark" >> "$temp_file"
-    done < <(ss -tlpn 2>/dev/null | awk '$1 == "LISTEN"')
+    info "Активные порты прямо сейчас:"
+    echo "------------------------------------------------------------"
+    ss -tulnp | grep LISTEN | awk '{print $5, $7}' | sed 's/::://g; s/0.0.0.0://g' | awk -F'[: ]' '{print "  • Порт:", $2, "->", $3}' | sort -u
+    echo "------------------------------------------------------------"
+}
 
-    printf "\n   %-10s %-25s %-20s %s\n" "Порт" "Статус" "Процесс" "Лимит"
-    printf "   %-10s %-25s %-20s %s\n" "----------" "-------------------------" "--------------------" "--------"
-    sort -t'|' -k1,1n -k2,2n "$temp_file" | while IFS="|" read -r _sort_key port type_str proc_str shaper_mark; do
-        printf "   %-10s %-25b %-20b %b\n" "$port" "$type_str" "$proc_str" "$shaper_mark"
-    done
-    rm -f "$temp_file"
+_tl_apply_limit_ebpf_wizard() {
+    _tl_ensure_ebpf_deps || return
+    clear; menu_header "eBPF Шейпер: Шаг 1 (Интерфейс)"
+    local iface; iface=$(_tl_select_interface) || return
+
+    clear; menu_header "eBPF Шейпер: Шаг 2 (Режим)"
+    printf_menu_option "1" "Статический (Простой лимит)"
+    printf_menu_option "2" "Динамический (Квоты + Штраф)"
+    local mode; mode=$(ask_number_in_range "Выбери режим" 1 2 1) || return
+
+    clear; menu_header "eBPF Шейпер: Шаг 3 (Порт)"
+    _tl_show_listening_ports_smart
+    local port; port=$(safe_read "Целевой порт (0 = ВСЕ ПОРТЫ)" "0") || return
+
+    clear; menu_header "eBPF Шейпер: Шаг 4 (Скорости)"
+    local down_speed; down_speed=$(ask_number_in_range "Скачивание (DL) Мбит/с" 1 10000 50) || return
+    local up_speed; up_speed=$(ask_number_in_range "Загрузка (UL) Мбит/с" 1 10000 50) || return
+    
+    local pspeed=10; local burst=100; local win=10; local pen=60
+    if [[ "$mode" == "2" ]]; then
+        pspeed=$(ask_number_in_range "Скорость при ШТРАФЕ (Мбит/с)" 1 1000 10) || return
+        burst=$(ask_number_in_range "Квота на Burst (Мбайт)" 1 50000 100) || return
+        win=$(ask_number_in_range "Окно проверки (секунд)" 1 3600 10) || return
+        pen=$(ask_number_in_range "Длительность штрафа (секунд)" 1 3600 60) || return
+    fi
+
+    clear; menu_header "Финальная проверка"
+    print_key_value "Интерфейс" "$iface" 25
+    print_key_value "Режим" "$( [[ "$mode" == "1" ]] && echo "Статика" || echo "Динамика" )" 25
+    print_key_value "Порт" "$port" 25
+    print_key_value "Download" "$down_speed Мбит/с" 25
+    print_key_value "Upload" "$up_speed Мбит/с" 25
     echo
-    printf_description "${C_GRAY}(EXTERNAL: со всех IP, LOCAL: только с 127.0.0.1, SPECIFIC: только с указанного IP)${C_RESET}"
-}
+    if ! ask_yes_no "Применить?"; then return; fi
 
-_tl_ensure_service_installed() { 
-    info "Создаю/обновляю скрипт применения правил..."
-    _tl_generate_master_apply_script | run_cmd tee "${TL_APPLY_SCRIPT_PATH}" > /dev/null
-    run_cmd chmod +x "${TL_APPLY_SCRIPT_PATH}"
-
-    if [[ ! -f "${TL_SERVICE_PATH}" ]]; then 
-        info "Создаю systemd сервис..."
-        _tl_generate_systemd_service | run_cmd tee "${TL_SERVICE_PATH}" > /dev/null
-        run_cmd systemctl daemon-reload
-        run_cmd systemctl enable "${TL_SERVICE_NAME}"
-    fi
-}
-
-_tl_uninstall_service() { 
-    run_cmd systemctl disable --now "${TL_SERVICE_NAME}" 2>/dev/null || true
-    run_cmd rm -f "${TL_SERVICE_PATH}" "${TL_APPLY_SCRIPT_PATH}"
-    run_cmd rm -rf "${TL_CONFIG_DIR}"
-    run_cmd systemctl daemon-reload
-    
-    local ifaces; ifaces=$(ip -o link show up | awk -F': ' '{print $2}' | grep -v '^lo$')
-    for iface in $ifaces; do 
-        run_cmd tc qdisc del dev "$iface" root 2>/dev/null || true
-        run_cmd tc qdisc del dev "$iface" ingress 2>/dev/null || true
-    done
-    run_cmd tc qdisc del dev ifb0 root 2>/dev/null || true
-}
-
-# ============================================================ #
-# ==           ГЕНЕРАТОР СКРИПТА ПРИМЕНЕНИЯ (U32 MODE)      == #
-# ============================================================ #
-
-_tl_generate_master_apply_script() {
-    cat << EOF
-#!/bin/bash
-set -u
-readonly CONFIG_DIR="/etc/reshala/traffic_limiter"
-readonly IFB_DEV="ifb0"
-
-# === ПАРАМЕТРЫ TC (АВТОМАТИЧЕСКИ ИЗ МОДУЛЯ) ===
-readonly DLRATEMODE="${TL_DL_RATE_MODE}"
-readonly DLBURST="${TL_DL_BURST}"
-readonly DLCBURST="${TL_DL_CBURST}"
-readonly DLQUANTUM="${TL_DL_QUANTUM}"
-
-readonly ULRATEMODE="${TL_UL_RATE_MODE}"
-readonly ULBURST="${TL_UL_BURST}"
-readonly ULCBURST="${TL_UL_CBURST}"
-readonly ULQUANTUM="${TL_UL_QUANTUM}"
-
-readonly PARENTQUANTUM="${TL_PARENT_QUANTUM}"
-readonly SFQPERTURB="${TL_SFQ_PERTURB}"
-readonly SFQLIMIT="${TL_SFQ_LIMIT}"
-
-log() { echo "[\$(date '+%H:%M:%S')] - \$1"; }
-
-run_tc() {
-    local cmd="\$*"
-    local out
-    if ! out=\$(tc \$* 2>&1); then
-        log "❌ tc \$cmd"
-        log "   Ответ: \$out"
-        exit 1
-    fi
-}
-
-# === HELPER: ГЕНЕРАЦИЯ HTB ПАРАМЕТРОВ ===
-generate_htb_params() {
-    local direction="\${1:-}"
-    local rate="\${2:-}"
-    
-    local params="htb rate \$rate"
-    
-    if [[ "\$direction" == "download" ]]; then
-        [[ "\$DLRATEMODE" == "strict" ]] && params+=" ceil \$rate"
-        [[ -n "\$DLBURST" ]] && params+=" burst \$DLBURST"
-        [[ -n "\$DLCBURST" ]] && params+=" cburst \$DLCBURST"
-        [[ -n "\$DLQUANTUM" ]] && params+=" quantum \$DLQUANTUM"
-    else
-        [[ "\$ULRATEMODE" == "strict" ]] && params+=" ceil \$rate"
-        [[ -n "\$ULBURST" ]] && params+=" burst \$ULBURST"
-        [[ -n "\$ULCBURST" ]] && params+=" cburst \$ULCBURST"
-        [[ -n "\$ULQUANTUM" ]] && params+=" quantum \$ULQUANTUM"
-    fi
-    
-    echo "\$params"
-}
-
-generate_sfq_params() {
-    local params="sfq"
-    [[ -n "\${SFQPERTURB:-}" ]] && params+=" perturb \$SFQPERTURB"
-    [[ -n "\${SFQLIMIT:-}" ]] && params+=" limit \$SFQLIMIT"
-    echo "\$params"
-}
-
-
-log "🚀 Запуск Reshala Traffic Limiter (U32 Hash Mode)..."
-
-# Выносим определение переменной из условного блока
-KERNEL_VERSION=\$(uname -r)
-
-# === ПРОВЕРКА ДОСТУПНОСТИ HTB ===
-if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
-    log "⚠️ Модуль sch_htb недоступен на ядре: \$KERNEL_VERSION"
-    log "Пытаюсь установить модули..."
-    
-    if [[ -f /etc/os-release ]]; then
-        source /etc/os-release
-        if [[ "\$ID" == "debian" ]]; then
-            log "Обнаружен Debian. Устанавливаю модули..."
-            apt update &>/dev/null
-            apt install -y linux-image-\$(uname -r) &>/dev/null || \
-            apt install -y linux-image-amd64 &>/dev/null
-        elif [[ "\$ID" == "ubuntu" ]]; then
-            log "Обнаружен Ubuntu. Устанавливаю модули..."
-            apt update &>/dev/null
-            apt install -y linux-modules-extra-\$(uname -r) &>/dev/null
-        fi
-    fi
-    
-    modprobe sch_htb &>/dev/null || true
-    
-    if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
-        log "❌ ОШИБКА: HTB недоступен!"
-        log ""
-        log "Текущее ядро: \$KERNEL_VERSION"
-        
-        if zcat /proc/config.gz 2>/dev/null | grep -q "CONFIG_NET_SCH_HTB is not set"; then
-            log "Причина: HTB выключен в конфигурации ядра"
-        elif [[ ! -d "/lib/modules/\$KERNEL_VERSION/kernel/net/sched" ]]; then
-            log "Причина: Модули TC отсутствуют для этого ядра"
-        fi
-        
-        log ""
-        log "РЕШЕНИЕ для Debian:"
-        log "  1. Установи стандартное ядро:"
-        log "     apt update && apt install -y linux-image-amd64"
-        log "  2. Перезагрузись: reboot"
-        log "  3. Выбери новое ядро в GRUB"
-        log "  4. Запусти сервис снова"
-        log ""
-        log "Если используешь кастомное ядро (BBR3):"
-        log "  - Пересобери с CONFIG_NET_SCH_HTB=m"
-        exit 1
-    fi
-fi
-tc qdisc del dev lo root &>/dev/null || true
-log "✅ Модуль HTB доступен"
-
-
-# Загрузка модулей
-modprobe ifb numifbs=1 &>/dev/null || true
-modprobe sch_htb &>/dev/null || true
-modprobe sch_sfq &>/dev/null || true
-modprobe cls_u32 &>/dev/null || true
-modprobe act_mirred &>/dev/null || true
-
-
-# 1. Очистка
-log "🧹 Очищаю старые правила..."
-ip -o link show up | awk -F': ' '{print \$2}' | grep -v '^lo$' | while read -r iface; do
-    tc qdisc del dev "\$iface" root &>/dev/null || true
-    tc qdisc del dev "\$iface" ingress &>/dev/null || true
-done
-tc qdisc del dev "\$IFB_DEV" root &>/dev/null || true
-
-
-# 2. Проверка конфигов
-mapfile -t conf_files < <(find "\${CONFIG_DIR}" -maxdepth 1 -name "port-*.conf" -type f | sort)
-if [[ \${#conf_files[@]} -eq 0 ]]; then
-    log "🤷 Нет конфигов."
-    exit 0
-fi
-log "📁 Найдено \${#conf_files[@]} конфигов."
-
-
-# 3. Подготовка IFB
-ip link set dev "\$IFB_DEV" up &>/dev/null || true
-
-
-# 4. Инициализация корневых дисциплин
-declare -A handled_ifaces
-for conf_file in "\${conf_files[@]}"; do
-    source "\$conf_file"
-    if [[ -z "\${handled_ifaces[\$IFACE]:-}" ]]; then
-        log "🌐 Инициализация \$IFACE..."
-        
-        run_tc qdisc add dev "\$IFACE" root handle 1: htb default 9999
-        run_tc class add dev "\$IFACE" parent 1: classid 1:9999 htb rate 10gbit
-        
-        run_tc qdisc add dev "\$IFACE" handle ffff: ingress
-        run_tc filter add dev "\$IFACE" parent ffff: protocol ip prio 1 u32 \
-            match u32 0 0 action mirred egress redirect dev "\$IFB_DEV"
-        
-        handled_ifaces[\$IFACE]=1
-    fi
-done
-
-
-if ! tc qdisc show dev "\$IFB_DEV" | grep -q "htb"; then
-    run_tc qdisc add dev "\$IFB_DEV" root handle 2: htb default 9999
-    run_tc class add dev "\$IFB_DEV" parent 2: classid 2:9999 htb rate 10gbit
-fi
-
-
-# 5. Применение правил
-PORT_IDX=1
-
-for conf_file in "\${conf_files[@]}"; do
-    source "\$conf_file"
-    
-    PORT_TOTAL_LIMIT="\${TOTAL_LIMIT:-10000mbit}"
-    MAX_USERS="\${MAX_USERS:-256}"
-    
-    DL_PARENT_MINOR=\$((0x10 * PORT_IDX))
-    DL_BUCKET_BASE=\$((0x200 * PORT_IDX))
-    DL_HASH_HANDLE=\$(printf "%x" \$((0x100 + PORT_IDX)))
-    
-    UL_PARENT_MINOR=\$((0x20 * PORT_IDX))
-    UL_BUCKET_BASE=\$((0x200 * PORT_IDX))
-    UL_HASH_HANDLE=\$(printf "%x" \$((0x200 + PORT_IDX)))
-    
-    log "🔌 Порт \$PORT на \$IFACE (Idx:\$PORT_IDX)"
-    log "   DL: Parent=1:\$(printf %x \$DL_PARENT_MINOR), Buckets=\$(printf %x \$DL_BUCKET_BASE)-\$(printf %x \$((DL_BUCKET_BASE + 255)))"
-    log "   UL: Parent=2:\$(printf %x \$UL_PARENT_MINOR), Buckets=\$(printf %x \$UL_BUCKET_BASE)-\$(printf %x \$((UL_BUCKET_BASE + 255)))"
-    log "   Лимиты: DL \$DOWN_LIMIT / UL \$UP_LIMIT (Max: \$MAX_USERS, Total: \$PORT_TOTAL_LIMIT)"
-
-
-    # ============================================================ 
-    # DOWNLOAD (EGRESS)
-    # ============================================================    
-    run_tc class add dev "\$IFACE" parent 1: classid "1:\$(printf %x \$DL_PARENT_MINOR)" \
-        htb rate "\$PORT_TOTAL_LIMIT" ceil "\$PORT_TOTAL_LIMIT" quantum \$PARENTQUANTUM
-    
-    run_tc filter add dev "\$IFACE" parent 1: protocol ip prio 1 \
-        handle "\${DL_HASH_HANDLE}:" u32 divisor 256
-    
-    run_tc filter add dev "\$IFACE" parent 1: protocol ip prio 1 u32 \
-        match ip sport "\$PORT" 0xffff \
-        hashkey mask 0x000000ff at 16 \
-        link "\${DL_HASH_HANDLE}:"
-    
-    for bucket in \$(seq 0 \$((MAX_USERS - 1))); do
-        CLASS_ID_DEC=\$((DL_BUCKET_BASE + bucket))
-        CLASS_ID="1:\$(printf %x \$CLASS_ID_DEC)"
-        BUCKET_HEX=\$(printf "%02x" \$bucket)
-        
-        run_tc class add dev "\$IFACE" parent "1:\$(printf %x \$DL_PARENT_MINOR)" \
-            classid "\$CLASS_ID" \$(generate_htb_params "download" "\$DOWN_LIMIT")
-        
-        run_tc qdisc add dev "\$IFACE" parent "\$CLASS_ID" \$(generate_sfq_params)
-        
-        run_tc filter add dev "\$IFACE" parent 1: protocol ip prio 1 u32 \
-            ht "\${DL_HASH_HANDLE}:\${BUCKET_HEX}:" \
-            match ip dst 0.0.0.0/0 \
-            flowid "\$CLASS_ID"
-    done
-
-
-        # ============================================================ 
-        # UPLOAD (INGRESS на IFB)
-        # ============================================================    
-        run_tc class add dev "\$IFB_DEV" parent 2: classid "2:\$(printf %x \$UL_PARENT_MINOR)" \
-            htb rate "\$PORT_TOTAL_LIMIT" ceil "\$PORT_TOTAL_LIMIT" quantum \$PARENTQUANTUM
-        
-        run_tc filter add dev "\$IFB_DEV" parent 2: protocol ip prio 1 \
-            handle "\${UL_HASH_HANDLE}:" u32 divisor 256
-        
-        run_tc filter add dev "\$IFB_DEV" parent 2: protocol ip prio 1 u32 \
-            match ip dport "\$PORT" 0xffff \
-            hashkey mask 0x000000ff at 12 \
-            link "\${UL_HASH_HANDLE}:"
-        
-        for bucket in \$(seq 0 \$((MAX_USERS - 1))); do
-            CLASS_ID_DEC=\$((UL_BUCKET_BASE + bucket))
-            CLASS_ID="2:\$(printf %x \$CLASS_ID_DEC)"
-            BUCKET_HEX=\$(printf "%02x" \$bucket)
-            
-            run_tc class add dev "\$IFB_DEV" parent "2:\$(printf %x \$UL_PARENT_MINOR)" \
-                classid "\$CLASS_ID" \$(generate_htb_params "upload" "\$UP_LIMIT")
-            
-            run_tc qdisc add dev "\$IFB_DEV" parent "\$CLASS_ID" \$(generate_sfq_params)
-            
-            run_tc filter add dev "\$IFB_DEV" parent 2: protocol ip prio 1 u32 \
-                ht "\${UL_HASH_HANDLE}:\${BUCKET_HEX}:" \
-                match ip src 0.0.0.0/0 \
-                flowid "\$CLASS_ID"
-        done
-
-
-        PORT_IDX=\$((PORT_IDX + 1))
-    done
-
-
-log "✅ Правила успешно применены!"
+    _tl_cleanup_old_system
+    _tl_compile_bpf || return
+    mkdir -p "${TL_CONFIG_DIR}"
+    cat << EOF > "${TL_CONFIG_DIR}/ebpf_config.conf"
+IFACE="${iface}"
+MODE="${mode}"
+PORT="${port}"
+DOWN="${down_speed}"
+UP="${up_speed}"
+BURST="${burst}"
+WIN="${win}"
+PEN="${pen}"
 EOF
+
+    _tl_generate_ebpf_service_file > "${TL_SERVICE_PATH}"
+    systemctl daemon-reload && systemctl enable "${TL_SERVICE_NAME}"
+    if systemctl restart "${TL_SERVICE_NAME}"; then ok "Движок запущен!"; else err "Ошибка запуска!"; fi
 }
 
-_tl_generate_systemd_service() {
+_tl_generate_ebpf_service_file() {
+    source "${TL_CONFIG_DIR}/ebpf_config.conf"
     cat << EOF
 [Unit]
-Description=Reshala Traffic Limiter Service
-After=network.target
+Description=Reshala eBPF Traffic Limiter (DL/UL)
+After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=${TL_APPLY_SCRIPT_PATH}
 RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
+ExecStartPre=-/sbin/modprobe ifb numifbs=1
+ExecStartPre=-/sbin/ip link set dev ifb0 up
+ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} root
+ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} clsact
+ExecStartPre=/sbin/tc qdisc add dev ${IFACE} root fq
+ExecStartPre=/sbin/tc qdisc add dev ${IFACE} clsact
+ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/down
+ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/down
+ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress protocol all prio 1 u32 match u32 0 0 action mirred egress redirect dev ifb0
+ExecStartPre=-/sbin/tc qdisc del dev ifb0 root
+ExecStartPre=/sbin/tc qdisc add dev ifb0 root fq
+ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/up
+ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN}
+ExecStop=/sbin/tc qdisc del dev ${IFACE} root
+ExecStop=/sbin/tc qdisc del dev ${IFACE} clsact
+ExecStop=/sbin/ip link set dev ifb0 down
 
 [Install]
 WantedBy=multi-user.target
 EOF
+}
+
+_tl_show_status() {
+    if ! systemctl is-active --quiet "${TL_SERVICE_NAME}"; then warn "Не запущен."; return; fi
+    clear; menu_header "Статистика eBPF шейпера"
+    python3 "${TL_CTRL_PY_PATH}" status
+}
+
+_tl_restart_ebpf_engine() {
+    info "Перезагрузка..."; _tl_compile_bpf || return
+    systemctl restart "${TL_SERVICE_NAME}" && ok "Перезапущено."
+}
+
+_tl_complete_cleanup_wizard() {
+    if ask_yes_no "Полностью удалить шейпер?"; then
+        _tl_cleanup_old_system; rm -rf "${TL_CONFIG_DIR}"; ok "Всё удалено.";
+    fi
+}
+
+_tl_view_service_log() {
+    clear; menu_header "Логи"; journalctl -u "${TL_SERVICE_NAME}" -n 50 --no-pager
+}
+
+_tl_monitor_traffic() {
+    ensure_package "iftop"
+    local iface; iface=$(_tl_select_interface) || return
+    iftop -n -i "$iface"
+}
+
+_tl_select_interface() {
+    local ifaces=($(ip -o link show | awk -F': ' '{print $2}' | grep -v 'lo'))
+    if [[ ${#ifaces[@]} -eq 0 ]]; then return 1; fi
+    if [[ ${#ifaces[@]} -eq 1 ]]; then echo "${ifaces[0]}"; return 0; fi
+    local choice; choice=$(ask_selection "Выбери интерфейс:" "${ifaces[@]}") || return 1
+    echo "${ifaces[$((choice-1))]}"
 }
