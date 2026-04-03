@@ -1,3 +1,13 @@
+/*
+ * Reshala Traffic Limiter (eBPF + EDT Edition)
+ * v4.0: Multi-Rule support — each port group gets its own rate limit.
+ *
+ * Architecture:
+ *   port_rule_map  : port (u32) → rule_id (u32)
+ *   config_map     : rule_id (u32) → struct rule_config
+ *   user_state_map : {ip[4], rule_id} → struct user_state  (per direction)
+ */
+
 #include <linux/bpf.h>
 #include <linux/pkt_cls.h>
 #include <linux/if_ether.h>
@@ -9,31 +19,30 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-/*
- * Reshala Traffic Limiter (eBPF + EDT Edition)
- * v3.1: Support separate Download/Upload paths.
- */
+#define MAX_PORTS  32
+#define MAX_RULES  32
 
-#define MAX_PORTS 32
-
-// Configuration structure
-struct config_data {
-    __u32 mode;                // 1 = Static, 2 = Dynamic
-    __u32 num_ports;           // How many ports to filter (0 = all traffic)
-    __u32 ports[MAX_PORTS];   // Ports to shape (up to 16)
-    __u64 normal_rate_bps;     // Normal rate in bytes/sec
-    __u64 penalty_rate_bps;    // Penalty rate in bytes/sec
-    __u64 burst_bytes_limit;   // Allowed burst before penalty (bytes)
-    __u64 window_time_ns;      // Time window for burst check (ns)
-    __u64 penalty_time_ns;     // Duration of penalty (ns)
+/* Per-rule configuration */
+struct rule_config {
+    __u32 mode;                    /* 0=off, 1=static, 2=dynamic */
+    __u32 num_ports;               /* info only — routing done via port_rule_map */
+    __u32 ports[MAX_PORTS];        /* info only */
+    __u64 down_rate_bps;           /* download rate (bytes/s) */
+    __u64 up_rate_bps;             /* upload rate  (bytes/s) */
+    __u64 penalty_rate_bps;        /* penalty rate (bytes/s) */
+    __u64 burst_bytes_limit;       /* burst threshold before penalty */
+    __u64 window_time_ns;          /* burst measurement window */
+    __u64 penalty_time_ns;         /* how long penalty lasts */
 };
 
-// Key for the user state map (supports IPv4/IPv6)
-struct ip_key {
-    __u32 addr[4];
+/* Key for per-user-per-rule state */
+struct user_rule_key {
+    __u32 addr[4];   /* IPv4 or IPv6 */
+    __u32 rule_id;
+    __u32 _pad;      /* alignment */
 };
 
-// Per-user state
+/* Per-user EDT state */
 struct user_state {
     __u64 bytes_in_window;
     __u64 window_start_time;
@@ -44,81 +53,91 @@ struct user_state {
     __u32 _pad;
 };
 
-// Maps for configuration (Index 0 = Down, Index 1 = Up)
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 2);
-    __type(key, __u32);
-    __type(value, struct config_data);
-} config_map SEC(".maps");
-
-// Maps for user states (Index 0 = Down, Index 1 = Up)
-// Using two separate maps for cleaner statistics and faster lookups per path
+/* port → rule_id  (hash map, keyed by u32 port number) */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
-    __type(key, struct ip_key);
+    __type(key,   __u32);
+    __type(value, __u32);
+} port_rule_map SEC(".maps");
+
+/* rule_id → rule_config  (array, indexed by rule_id 0..MAX_RULES-1) */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, MAX_RULES);
+    __type(key,   __u32);
+    __type(value, struct rule_config);
+} config_map SEC(".maps");
+
+/* Download user states  ({ip, rule_id} → user_state) */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key,   struct user_rule_key);
     __type(value, struct user_state);
 } user_state_map_down SEC(".maps");
 
+/* Upload user states  ({ip, rule_id} → user_state) */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
-    __type(key, struct ip_key);
+    __type(key,   struct user_rule_key);
     __type(value, struct user_state);
 } user_state_map_up SEC(".maps");
 
-// Internal helper for shaping logic
-static __always_inline int process_packet(struct __sk_buff *skb, __u32 config_idx, void *user_map) {
-    struct config_data *conf = bpf_map_lookup_elem(&config_map, &config_idx);
-    if (!conf || conf->mode == 0) return TC_ACT_OK;
-
-    void *data = (void *)(long)skb->data;
+/*
+ * Core shaping function.
+ *  direction: 0 = Download (main iface EGRESS → user), 1 = Upload (IFB EGRESS ← user)
+ *  user_map:  pointer to user_state_map_down or user_state_map_up
+ */
+static __always_inline int process_packet(
+    struct __sk_buff *skb, __u32 direction, void *user_map)
+{
+    void *data     = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
+
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end) return TC_ACT_OK;
 
-    struct ip_key ip_k = {0};
+    struct user_rule_key user_key = {0};
     __u16 sport = 0, dport = 0;
-    __u8 protocol = 0;
+    __u8  proto = 0;
     void *trans_hdr = NULL;
 
-    // --- Parse IP ---
+    /* ── Parse IP header ── */
     if (eth->h_proto == bpf_htons(ETH_P_IP)) {
         struct iphdr *ip = (struct iphdr *)(eth + 1);
         if ((void *)(ip + 1) > data_end) return TC_ACT_OK;
-        
-        // For Egress: saddr is server IP or user IP depending on interface
-        // We use saddr because we care about the source of the packet we are shaping
-        // Actually, for VPN:
-        // Down (Egress on Physical): saddr = server, daddr = user (WE SHAPE daddr)
-        // Up (Egress on IFB0): saddr = user, daddr = destination (WE SHAPE saddr)
-        if (config_idx == 0) ip_k.addr[0] = ip->daddr; // Download -> look at DEST
-        else ip_k.addr[0] = ip->saddr;                // Upload -> look at SRC
-        
-        protocol = ip->protocol;
+
+        /* DL: shape by daddr (packet going TO user)
+         * UL: shape by saddr (packet coming FROM user) */
+        if (direction == 0) user_key.addr[0] = ip->daddr;
+        else                user_key.addr[0] = ip->saddr;
+
+        proto    = ip->protocol;
         trans_hdr = (void *)ip + (ip->ihl * 4);
+
     } else if (eth->h_proto == bpf_htons(ETH_P_IPV6)) {
         struct ipv6hdr *ipv6 = (struct ipv6hdr *)(eth + 1);
         if ((void *)(ipv6 + 1) > data_end) return TC_ACT_OK;
-        
-        if (config_idx == 0) __builtin_memcpy(ip_k.addr, ipv6->daddr.in6_u.u6_addr32, 16);
-        else __builtin_memcpy(ip_k.addr, ipv6->saddr.in6_u.u6_addr32, 16);
-        
-        protocol = ipv6->nexthdr;
+
+        if (direction == 0) __builtin_memcpy(user_key.addr, ipv6->daddr.in6_u.u6_addr32, 16);
+        else                __builtin_memcpy(user_key.addr, ipv6->saddr.in6_u.u6_addr32, 16);
+
+        proto    = ipv6->nexthdr;
         trans_hdr = (void *)(ipv6 + 1);
     } else {
         return TC_ACT_OK;
     }
 
-    // --- Parse Ports (TCP/UDP) ---
-    if (protocol == IPPROTO_TCP) {
+    /* ── Parse transport ports ── */
+    if (proto == IPPROTO_TCP) {
         struct tcphdr *tcp = (struct tcphdr *)trans_hdr;
         if ((void *)(tcp + 1) <= data_end) {
             sport = bpf_ntohs(tcp->source);
             dport = bpf_ntohs(tcp->dest);
         }
-    } else if (protocol == IPPROTO_UDP) {
+    } else if (proto == IPPROTO_UDP) {
         struct udphdr *udp = (struct udphdr *)trans_hdr;
         if ((void *)(udp + 1) <= data_end) {
             sport = bpf_ntohs(udp->source);
@@ -126,73 +145,78 @@ static __always_inline int process_packet(struct __sk_buff *skb, __u32 config_id
         }
     }
 
-    // --- Port Filtering ---
-    // If num_ports == 0: pass ALL traffic
-    // If num_ports  > 0: pass ONLY matching ports
-    if (conf->num_ports > 0) {
-        __u32 matched = 0;
-        for (__u32 i = 0; i < MAX_PORTS; i++) {
-            if (i >= conf->num_ports) break;
-            __u16 p = (__u16)conf->ports[i];
-            if (p == 0) break;
-            if (sport == p || dport == p) { matched = 1; break; }
-        }
-        if (!matched) return TC_ACT_OK;
-    }
+    /* ── Port → Rule lookup ──
+     * For DL (server→user): sport = server listening port  → match sport
+     * For UL (user→server): dport = server listening port  → match dport
+     * We try both so the same port_rule_map works for both directions.
+     */
+    __u32 *rule_id_p = NULL;
+    __u32  s32 = sport, d32 = dport;
 
-    // --- User state management ---
-    struct user_state *state = bpf_map_lookup_elem(user_map, &ip_k);
-    __u64 now = bpf_ktime_get_ns();
+    if (s32 > 0) rule_id_p = bpf_map_lookup_elem(&port_rule_map, &s32);
+    if (!rule_id_p && d32 > 0) rule_id_p = bpf_map_lookup_elem(&port_rule_map, &d32);
+    if (!rule_id_p) return TC_ACT_OK;   /* port not in any rule → pass */
+
+    __u32 rule_id = *rule_id_p;
+    if (rule_id >= MAX_RULES) return TC_ACT_OK;
+
+    /* ── Load rule config ── */
+    struct rule_config *conf = bpf_map_lookup_elem(&config_map, &rule_id);
+    if (!conf || conf->mode == 0) return TC_ACT_OK;
+
+    /* ── User state (keyed by {ip, rule_id}) ── */
+    user_key.rule_id = rule_id;
+
+    struct user_state *state = bpf_map_lookup_elem(user_map, &user_key);
+    __u64 now        = bpf_ktime_get_ns();
     __u32 packet_len = skb->len;
 
     if (!state) {
         struct user_state ns = {
-            .window_start_time = now,
+            .window_start_time  = now,
             .last_departure_time = now,
-            .total_bytes = packet_len
+            .total_bytes        = packet_len,
         };
-        bpf_map_update_elem(user_map, &ip_k, &ns, BPF_ANY);
+        bpf_map_update_elem(user_map, &user_key, &ns, BPF_ANY);
         return TC_ACT_OK;
     }
 
     __sync_fetch_and_add(&state->total_bytes, packet_len);
 
+    /* ── Dynamic burst/penalty logic ── */
     if (conf->mode == 2) {
         if (state->is_penalized && now > state->penalty_end_time) {
-            state->is_penalized = 0;
+            state->is_penalized    = 0;
             state->window_start_time = now;
-            state->bytes_in_window = 0;
+            state->bytes_in_window   = 0;
         }
-
         if (!state->is_penalized) {
             if (now - state->window_start_time > conf->window_time_ns) {
                 state->window_start_time = now;
-                state->bytes_in_window = 0;
+                state->bytes_in_window   = 0;
             }
             state->bytes_in_window += packet_len;
             if (state->bytes_in_window > conf->burst_bytes_limit) {
-                state->is_penalized = 1;
+                state->is_penalized   = 1;
                 state->penalty_end_time = now + conf->penalty_time_ns;
             }
         }
     }
 
-    __u64 current_rate = conf->normal_rate_bps;
-    if (conf->mode == 2 && state->is_penalized) {
-        current_rate = conf->penalty_rate_bps;
-    }
+    /* ── EDT shaping ── */
+    __u64 rate = (direction == 0) ? conf->down_rate_bps : conf->up_rate_bps;
+    if (conf->mode == 2 && state->is_penalized) rate = conf->penalty_rate_bps;
+    if (rate == 0) return TC_ACT_OK;
 
-    if (current_rate == 0) return TC_ACT_OK;
-
-    __u64 delay_ns = ((__u64)packet_len * 1000000000ULL) / current_rate;
+    __u64 delay_ns       = ((__u64)packet_len * 1000000000ULL) / rate;
     __u64 departure_time = state->last_departure_time;
     if (now > departure_time) departure_time = now;
     departure_time += delay_ns;
 
-    if (departure_time - now > 2000000000ULL) return TC_ACT_SHOT; 
+    if (departure_time - now > 2000000000ULL) return TC_ACT_SHOT; /* > 2s ahead → drop */
 
     state->last_departure_time = departure_time;
-    skb->tstamp = departure_time; 
+    skb->tstamp = departure_time;
 
     return TC_ACT_OK;
 }

@@ -57,24 +57,28 @@ show_traffic_limiter_menu() {
         local status_icon="${C_GRAY}[∅ Не настроен]${C_RESET}"
         if [[ "$is_active" == "true" ]]; then status_icon="${C_GREEN}[✓ Работает: eBPF активен]${C_RESET}"; fi
 
-        printf_menu_option "1" "📊 Текущий статус (Топ-IP) ${status_icon}"
-        printf_menu_option "2" "➕ Настроить лимиты (eBPF)"
-        printf_menu_option "3" "🧹 Полная очистка системы"
-        printf_menu_option "4" "📜 Посмотреть лог сервиса"
-        printf_menu_option "5" "🔄 Перезапустить движок"
-        printf_menu_option "6" "📈 Мониторинг (iftop)"
+        printf_menu_option "1" "📋 Активные правила ${status_icon}"
+        printf_menu_option "2" "📊 Статистика (топ IP по правилам)"
+        printf_menu_option "3" "➕ Добавить / изменить правило"
+        printf_menu_option "4" "🗑  Удалить правило"
+        printf_menu_option "5" "🧹 Полная очистка системы"
+        printf_menu_option "6" "📜 Посмотреть лог сервиса"
+        printf_menu_option "7" "🔄 Перезапустить движок"
+        printf_menu_option "8" "📈 Мониторинг (iftop)"
         echo; printf_menu_option "b" "🔙 Назад"; print_separator "-" 60
 
         local choice; choice=$(safe_read "Твой выбор") || break
         if [[ "$choice" == "b" || "$choice" == "B" ]]; then break; fi
         case "$choice" in
-            1) _tl_show_status ;; 
-            2) _tl_apply_limit_ebpf_wizard ;; 
-            3) _tl_complete_cleanup_wizard ;; 
-            4) _tl_view_service_log ;; 
-            5) _tl_restart_ebpf_engine ;;
-            6) _tl_monitor_traffic ;;
-            *) warn "Нет такого пункта." ;; 
+            1) _tl_list_rules ;;
+            2) _tl_show_status ;;
+            3) _tl_apply_limit_ebpf_wizard ;;
+            4) _tl_delete_rule_wizard ;;
+            5) _tl_complete_cleanup_wizard ;;
+            6) _tl_view_service_log ;;
+            7) _tl_restart_ebpf_engine ;;
+            8) _tl_monitor_traffic ;;
+            *) warn "Нет такого пункта." ;;
         esac
         wait_for_enter
     done
@@ -207,101 +211,163 @@ _tl_show_shaper_intro() {
     echo
 }
 
+_tl_list_rules() {
+    clear; menu_header "📋 Активные правила шейпера"
+    python3 "${TL_CTRL_PY_PATH}" \
+        --pin-dir "${TL_BPF_PIN_DIR}/maps" \
+        --rules-file "${TL_CONFIG_DIR}/rules.json" \
+        rules
+}
+
+_tl_delete_rule_wizard() {
+    clear; menu_header "🗑  Удалить правило"
+    python3 "${TL_CTRL_PY_PATH}" \
+        --pin-dir "${TL_BPF_PIN_DIR}/maps" \
+        --rules-file "${TL_CONFIG_DIR}/rules.json" \
+        rules
+    echo
+    local max_id=$(( MAX_RULES - 1 )) 2>/dev/null || local max_id=31
+    local rule_id; rule_id=$(safe_read "Номер правила для удаления") || return
+    if ! [[ "$rule_id" =~ ^[0-9]+$ ]]; then
+        warn "Некорректный ID"; return
+    fi
+    if ask_yes_no "Удалить правило #${rule_id}?" "n"; then
+        python3 "${TL_CTRL_PY_PATH}" \
+            --pin-dir "${TL_BPF_PIN_DIR}/maps" \
+            --rules-file "${TL_CONFIG_DIR}/rules.json" \
+            delete --rule-id "${rule_id}"
+    fi
+}
+
 _tl_apply_limit_ebpf_wizard() {
     _tl_ensure_ebpf_deps || return
     clear; menu_header "eBPF Шейпер — Информация"
     _tl_show_shaper_intro
     wait_for_enter
 
-    clear; menu_header "eBPF Шейпер: Шаг 1 (Интерфейс)"
-    echo -e "  ${C_YELLOW}💡 Как выбрать интерфейс?${C_RESET}"
-    echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
-    echo -e "  ${C_GREEN}✔${C_RESET} Выбирай основной сетевой интерфейс (обычно ${C_YELLOW}ens3${C_RESET}, ${C_YELLOW}eth0${C_RESET}, ${C_YELLOW}enp3s0${C_RESET})"
-    echo -e "  ${C_GREEN}✔${C_RESET} Это тот интерфейс, через который идёт трафик пользователей"
-    echo -e "  ${C_RED}✗${C_RESET} НЕ выбирай ${C_GRAY}docker0${C_RESET}, ${C_GRAY}br-*${C_RESET}, ${C_GRAY}veth*${C_RESET} — это внутренние мосты Docker"
-    echo -e "  ${C_RED}✗${C_RESET} НЕ выбирай ${C_GRAY}lo${C_RESET} — это loopback (петля, только для локального трафика)"
-    echo -e ""
-    echo -e "  ${C_GRAY}Подсказка: у основного интерфейса обычно наибольший трафик"
-    echo -e "  в iftop и он связан с публичным IP-адресом сервера.${C_RESET}"
-    echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
+    # ── Шаг 0: какой rule_id ──
+    clear; menu_header "eBPF Шейпер: Шаг 0 (ID правила)"
+    echo -e "  ${C_YELLOW}💡 Текущие правила:${C_RESET}"
+    python3 "${TL_CTRL_PY_PATH}" \
+        --pin-dir "${TL_BPF_PIN_DIR}/maps" \
+        --rules-file "${TL_CONFIG_DIR}/rules.json" \
+        rules 2>/dev/null || true
     echo
-    local iface; iface=$(_tl_select_interface) || return
+    echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
+    echo -e "  ${C_CYAN}ID 0..31. Новое правило — свободный номер.${C_RESET}"
+    echo -e "  ${C_CYAN}Изменить существующее — введи его ID.${C_RESET}"
+    local rule_id; rule_id=$(ask_number_in_range "Номер правила (rule_id)" 0 31 0) || return
 
+    # ── Шаг 1: интерфейс (только если движок ещё не запущен) ──
+    local is_active="false"
+    if systemctl is-active --quiet "${TL_SERVICE_NAME}"; then is_active="true"; fi
+    local iface=""
+    if [[ "$is_active" == "false" ]]; then
+        clear; menu_header "eBPF Шейпер: Шаг 1 (Интерфейс)"
+        echo -e "  ${C_YELLOW}💡 Как выбрать интерфейс?${C_RESET}"
+        echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
+        echo -e "  ${C_GREEN}✔${C_RESET} Выбирай основной сетевой интерфейс (${C_YELLOW}ens3${C_RESET}, ${C_YELLOW}eth0${C_RESET}, ${C_YELLOW}enp3s0${C_RESET})"
+        echo -e "  ${C_GREEN}✔${C_RESET} Через него идёт трафик пользователей"
+        echo -e "  ${C_RED}✗${C_RESET} НЕ выбирай ${C_GRAY}docker0${C_RESET}, ${C_GRAY}br-*${C_RESET}, ${C_GRAY}veth*${C_RESET} — мосты Docker"
+        echo -e "  ${C_RED}✗${C_RESET} НЕ выбирай ${C_GRAY}lo${C_RESET} — loopback"
+        echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
+        echo
+        iface=$(_tl_select_interface) || return
+    else
+        iface=$(grep 'IFACE=' "${TL_CONFIG_DIR}/ebpf_config.conf" 2>/dev/null | cut -d'"' -f2)
+        info "Движок уже запущен на интерфейсе ${C_YELLOW}${iface}${C_RESET}, пропускаем выбор."
+    fi
+
+    # ── Шаг 2: режим ──
     clear; menu_header "eBPF Шейпер: Шаг 2 (Режим)"
     echo -e "  ${C_YELLOW}💡 Выбери режим шейпинга:${C_RESET}"
     echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
     echo -e ""
     echo -e "  ${C_GREEN}[1] Статический${C_RESET} — жёсткий лимит скорости всегда"
-    echo -e "      ${C_GRAY}Каждый пользователь получает ровно N МБ/с в любое время."
-    echo -e "      Превысить лимит невозможно. Просто и предсказуемо.${C_RESET}"
-    echo -e "      ${C_CYAN}→ Подходит для: VPN, игровых серверов, стабильного качества${C_RESET}"
+    echo -e "      ${C_GRAY}Каждый пользователь получает ровно N МБ/с. Просто и предсказуемо.${C_RESET}"
+    echo -e "      ${C_CYAN}→ Подходит: VPN, игровые серверы, стабильное качество${C_RESET}"
     echo -e ""
     echo -e "  ${C_YELLOW}[2] Динамический${C_RESET} — burst → квота → штраф → восстановление"
-    echo -e "      ${C_GRAY}Пользователь может скачать быстро до квоты (например 100 МБ),"
-    echo -e "      после чего скорость резко падает (штраф, например 1 МБ/с),"
-    echo -e "      а через заданное время восстанавливается до полной скорости.${C_RESET}"
-    echo -e "      ${C_CYAN}→ Подходит для: ограничения «качальщиков», справедливое распределение${C_RESET}"
+    echo -e "      ${C_GRAY}Быстро до квоты, затем штрафная скорость, потом восстановление.${C_RESET}"
+    echo -e "      ${C_CYAN}→ Подходит: ограничение «качальщиков», справедливое распределение${C_RESET}"
     echo -e ""
     echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
     local mode; mode=$(ask_number_in_range "Выбери режим" 1 2 1) || return
 
+    # ── Шаг 3: порты ──
     clear; menu_header "eBPF Шейпер: Шаг 3 (Порты)"
     _tl_show_listening_ports_smart
     echo
     info "Можно указать несколько портов через запятую: ${C_YELLOW}443,80,8080${C_RESET} — или ${C_YELLOW}0${C_RESET} для всех"
     local ports_input; ports_input=$(safe_read "Порты (через запятую, 0 = все порты)" "0") || return
-    # Убираем пробелы
     ports_input=$(echo "$ports_input" | tr -d ' ')
 
+    # ── Шаг 4: скорости ──
     clear; menu_header "eBPF Шейпер: Шаг 4 (Скорости)"
     _tl_show_speed_reference
     local down_speed; down_speed=$(ask_number_in_range "Скачивание (DL) МБ/с" 1 5000 5) || return
-    local up_speed; up_speed=$(ask_number_in_range "Загрузка (UL) МБ/с" 1 5000 5) || return
-    
-    local pspeed=1; local burst=100; local win=10; local pen=60
+    local up_speed;   up_speed=$(ask_number_in_range   "Загрузка   (UL) МБ/с" 1 5000 5) || return
+
+    local pspeed=0.1; local burst=100; local win=10; local pen=60
     if [[ "$mode" == "2" ]]; then
-        pspeed=$(ask_number_in_range "Скорость при ШТРАФЕ (МБ/с)" 1 1000 1) || return
-        burst=$(ask_number_in_range "Квота на Burst (МБайт)" 1 50000 100) || return
-        win=$(ask_number_in_range "Окно проверки (секунд)" 1 3600 10) || return
-        pen=$(ask_number_in_range "Длительность штрафа (секунд)" 1 3600 60) || return
+        pspeed=$(ask_number_in_range "Скорость при ШТРАФЕ (МБ/с)"   1 1000 1)  || return
+        burst=$(ask_number_in_range  "Квота на Burst (МБайт)"        1 50000 100) || return
+        win=$(ask_number_in_range    "Окно проверки (секунд)"         1 3600 10)  || return
+        pen=$(ask_number_in_range    "Длительность штрафа (секунд)"   1 3600 60)  || return
     fi
 
+    # ── Финальная проверка ──
     clear; menu_header "Финальная проверка"
+    print_key_value "Правило #" "$rule_id" 25
     print_key_value "Интерфейс" "$iface" 25
-    print_key_value "Режим" "$( [[ "$mode" == "1" ]] && echo "Статика" || echo "Динамика" )" 25
-    print_key_value "Порты" "$( [[ "$ports_input" == "0" ]] && echo "ВСЕ ПОРТЫ" || echo "$ports_input" )" 25
-    print_key_value "Download" "$down_speed МБ/с  ($(( down_speed * 8 )) Мбит/с)" 25
-    print_key_value "Upload" "$up_speed МБ/с  ($(( up_speed * 8 )) Мбит/с)" 25
+    print_key_value "Режим"     "$( [[ "$mode" == "1" ]] && echo "Статика" || echo "Динамика" )" 25
+    print_key_value "Порты"     "$( [[ "$ports_input" == "0" ]] && echo "ВСЕ ПОРТЫ" || echo "$ports_input" )" 25
+    print_key_value "Download"  "$down_speed МБ/с  ($(( down_speed * 8 )) Мбит/с)" 25
+    print_key_value "Upload"    "$up_speed МБ/с  ($(( up_speed * 8 )) Мбит/с)" 25
     echo
     if ! ask_yes_no "Применить?"; then return; fi
 
-    _tl_cleanup_old_system
-    _tl_compile_bpf || return
-    mkdir -p "${TL_CONFIG_DIR}"
-    cat << EOF > "${TL_CONFIG_DIR}/ebpf_config.conf"
+    # ── Применяем ──
+    if [[ "$is_active" == "false" ]]; then
+        # Первый запуск — полная установка движка
+        _tl_cleanup_old_system
+        _tl_compile_bpf || return
+        mkdir -p "${TL_CONFIG_DIR}"
+        cat <<EOF > "${TL_CONFIG_DIR}/ebpf_config.conf"
 IFACE="${iface}"
-MODE="${mode}"
-PORTS="${ports_input}"
-DOWN="${down_speed}"
-UP="${up_speed}"
-BURST="${burst}"
-WIN="${win}"
-PEN="${pen}"
 EOF
+        _tl_generate_ebpf_service_file > "${TL_SERVICE_PATH}"
+        systemctl daemon-reload && systemctl enable "${TL_SERVICE_NAME}"
+        if ! systemctl restart "${TL_SERVICE_NAME}"; then
+            err "Ошибка запуска движка!"; return
+        fi
+        ok "Движок запущен!"
+    fi
 
-    _tl_generate_ebpf_service_file > "${TL_SERVICE_PATH}"
-    systemctl daemon-reload && systemctl enable "${TL_SERVICE_NAME}"
-    if systemctl restart "${TL_SERVICE_NAME}"; then ok "Движок запущен!"; else err "Ошибка запуска!"; fi
+    # Применяем правило (движок уже работает)
+    info "Применяю правило #${rule_id}..."
+    python3 "${TL_CTRL_PY_PATH}" \
+        --pin-dir "${TL_BPF_PIN_DIR}/maps" \
+        --rules-file "${TL_CONFIG_DIR}/rules.json" \
+        set \
+        --rule-id "${rule_id}" \
+        --mode    "${mode}" \
+        --ports   "${ports_input}" \
+        --down    "${down_speed}" \
+        --up      "${up_speed}" \
+        --pen     "${pspeed}" \
+        --burst   "${burst}" \
+        --win     "${win}" \
+        --pen-sec "${pen}"
 }
 
 _tl_generate_ebpf_service_file() {
     source "${TL_CONFIG_DIR}/ebpf_config.conf"
-    # Пути пинов раскладываем в переменные для читаемости
     local PIN_PROGS="${TL_BPF_PIN_DIR}/progs"
     local PIN_MAPS="${TL_BPF_PIN_DIR}/maps"
     cat <<EOF
 [Unit]
-Description=Reshala eBPF Traffic Limiter (DL/UL)
+Description=Reshala eBPF Traffic Limiter (Multi-Rule)
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -314,7 +380,7 @@ ExecStartPre=/sbin/modprobe ifb numifbs=1
 ExecStartPre=-/sbin/ip link add ifb0 type ifb
 ExecStartPre=/sbin/ip link set dev ifb0 up
 
-# === ОЧИСТКА (с - prefix = игнорировать ошибки) ===
+# === ОЧИСТКА ===
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} root
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} clsact
 ExecStartPre=-/sbin/tc qdisc del dev ifb0 root
@@ -322,28 +388,22 @@ ExecStartPre=-/sbin/tc qdisc del dev ifb0 clsact
 ExecStartPre=/bin/rm -rf ${TL_BPF_PIN_DIR}
 ExecStartPre=/bin/mkdir -p ${PIN_PROGS} ${PIN_MAPS}
 
-# === ЗАГРУЗКА BPF-ПРОГРАММ С ПИНИНГОМ ===
-# prog loadall: загружает ВСЕ секции из .o файла, пинит программы в /progs/,
-# пинит все карты в /maps/ — решает проблему "several maps match this handle"
-# Имена пинированных программ = имена функций в C: handle_down, handle_up
+# === ЗАГРУЗКА BPF-ПРОГРАММ ===
 ExecStartPre=/sbin/bpftool prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} pinmaps ${PIN_MAPS}
 
-# === ОСНОВНОЙ ИНТЕРФЕЙС ${IFACE} ===
+# === ИНТЕРФЕЙС ${IFACE} ===
 ExecStartPre=/sbin/tc qdisc add dev ${IFACE} root fq
 ExecStartPre=/sbin/tc qdisc add dev ${IFACE} clsact
-# Download: BPF из пина (имя = имя C-функции handle_down)
 ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/handle_down
-# Upload capture: перенаправляем входящий трафик на IFB
 ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress protocol all prio 1 u32 match u32 0 0 action mirred egress redirect dev ifb0
 
 # === IFB (Upload path) ===
 ExecStartPre=/sbin/tc qdisc add dev ifb0 root fq
 ExecStartPre=/sbin/tc qdisc add dev ifb0 clsact
-# Upload: BPF из пина (имя = имя C-функции handle_up)
 ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action pinned ${PIN_PROGS}/handle_up
 
-# === ЗАГРУЗКА КОНФИГУРАЦИИ В BPF MAP (через pinned path) ===
-ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} set --mode ${MODE} --ports ${PORTS} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN}
+# === ВОССТАНОВЛЕНИЕ ВСЕХ ПРАВИЛ ИЗ rules.json ===
+ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore
 
 # === ОСТАНОВКА ===
 ExecStop=/bin/rm -rf ${TL_BPF_PIN_DIR}
