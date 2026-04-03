@@ -206,6 +206,9 @@ EOF
 
 _tl_generate_ebpf_service_file() {
     source "${TL_CONFIG_DIR}/ebpf_config.conf"
+    # Пути пинов раскладываем в переменные для читаемости
+    local PIN_PROGS="${TL_BPF_PIN_DIR}/progs"
+    local PIN_MAPS="${TL_BPF_PIN_DIR}/maps"
     cat <<EOF
 [Unit]
 Description=Reshala eBPF Traffic Limiter (DL/UL)
@@ -216,40 +219,41 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 
-# === ПОДГОТОВКА IFB (для шейпинга Upload) ===
+# === ПОДГОТОВКА IFB (Upload shaping) ===
 ExecStartPre=/sbin/modprobe ifb numifbs=1
 ExecStartPre=-/sbin/ip link add ifb0 type ifb
 ExecStartPre=/sbin/ip link set dev ifb0 up
 
-# === ОЧИСТКА СТАРЫХ ПРАВИЛ И ПИНОВ ===
+# === ОЧИСТКА (с - prefix = игнорировать ошибки) ===
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} root
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} clsact
 ExecStartPre=-/sbin/tc qdisc del dev ifb0 root
 ExecStartPre=-/sbin/tc qdisc del dev ifb0 clsact
 ExecStartPre=/bin/rm -rf ${TL_BPF_PIN_DIR}
-ExecStartPre=/bin/mkdir -p ${TL_BPF_PIN_DIR}
+ExecStartPre=/bin/mkdir -p ${PIN_PROGS} ${PIN_MAPS}
 
-# === ЗАГРУЗКА BPF-ПРОГРАММЫ С ПИНИНГОМ КАРТ ===
-# bpftool prog load создаёт уникальные пины карт — решает "several maps match"
-ExecStartPre=/sbin/bpftool prog load ${TL_BPF_OBJ_PATH} ${TL_BPF_PIN_DIR}/shaper_down type classifier section classifier/down pinmaps ${TL_BPF_PIN_DIR}
-ExecStartPre=/sbin/bpftool prog load ${TL_BPF_OBJ_PATH} ${TL_BPF_PIN_DIR}/shaper_up type classifier section classifier/up pinmaps ${TL_BPF_PIN_DIR}
+# === ЗАГРУЗКА BPF-ПРОГРАММ С ПИНИНГОМ ===
+# prog loadall: загружает ВСЕ секции из .o файла, пинит программы в /progs/,
+# пинит все карты в /maps/ — решает проблему "several maps match this handle"
+# Имена пинированных программ = имена функций в C: handle_down, handle_up
+ExecStartPre=/sbin/bpftool prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} pinmaps ${PIN_MAPS}
 
-# === ОСНОВНОЙ ИНТЕРФЕЙС ===
+# === ОСНОВНОЙ ИНТЕРФЕЙС ${IFACE} ===
 ExecStartPre=/sbin/tc qdisc add dev ${IFACE} root fq
 ExecStartPre=/sbin/tc qdisc add dev ${IFACE} clsact
-# Download: загружаем программу из пина (не из obj — избегаем дублей карт!)
-ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action pinned ${TL_BPF_PIN_DIR}/shaper_down
+# Download: BPF из пина (имя = имя C-функции handle_down)
+ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/handle_down
 # Upload capture: перенаправляем входящий трафик на IFB
 ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress protocol all prio 1 u32 match u32 0 0 action mirred egress redirect dev ifb0
 
 # === IFB (Upload path) ===
 ExecStartPre=/sbin/tc qdisc add dev ifb0 root fq
 ExecStartPre=/sbin/tc qdisc add dev ifb0 clsact
-# Upload: загружаем программу из пина
-ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action pinned ${TL_BPF_PIN_DIR}/shaper_up
+# Upload: BPF из пина (имя = имя C-функции handle_up)
+ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action pinned ${PIN_PROGS}/handle_up
 
 # === ЗАГРУЗКА КОНФИГУРАЦИИ В BPF MAP (через pinned path) ===
-ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN} --pin-dir ${TL_BPF_PIN_DIR}
+ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN} --pin-dir ${PIN_MAPS}
 
 # === ОСТАНОВКА ===
 ExecStop=/bin/rm -rf ${TL_BPF_PIN_DIR}
@@ -268,7 +272,7 @@ EOF
 _tl_show_status() {
     if ! systemctl is-active --quiet "${TL_SERVICE_NAME}"; then warn "Не запущен."; return; fi
     clear; menu_header "Статистика eBPF шейпера"
-    python3 "${TL_CTRL_PY_PATH}" status
+    python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" status
 }
 
 _tl_restart_ebpf_engine() {
