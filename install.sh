@@ -12,7 +12,7 @@ set -e
 # --- Настройки (можно вынести, но для простоты оставим здесь) ---
 REPO_OWNER="DonMatteoVPN"
 REPO_NAME="Reshala-Remnawave-Bedolaga"
-REPO_BRANCH="main" # <-- ВАЖНО: Укажи правильную ветку!
+REPO_BRANCH="dev" # <-- ВАЖНО: Укажи правильную ветку!
 
 # --- Цвета ---
 C_RESET='\033[0m'; C_CYAN='\033[0;36m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m';
