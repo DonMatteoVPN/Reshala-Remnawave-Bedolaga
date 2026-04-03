@@ -142,15 +142,28 @@ def get_ip(key):
     return ":".join(parts)
 
 def get_value_field(value, field_name, byte_offset, byte_size=8):
-    """Читает поле из value — поддерживает BTF-dict и raw-list."""
+    """Читает поле из value — поддерживает BTF-dict и raw-list.
+    
+    bpftool может вернуть:
+    - BTF-формат:  {"total_bytes": 12345, ...}  → dict с именованными полями
+    - Raw-формат:  ["0a", "00", "b3", ...]       → список hex-строк (без BTF)
+    - Raw-формат:  [10, 0, 179, ...]             → список int (редко)
+    """
     if isinstance(value, dict):
-        return int(value.get(field_name, 0))
+        v = value.get(field_name, 0)
+        # Иногда BTF возвращает вложенный dict или список для составных типов
+        if isinstance(v, (int, float)):
+            return int(v)
+        return 0
     elif isinstance(value, list):
-        # Читаем little-endian integer из байтового массива
+        def to_byte(x):
+            if isinstance(x, int): return x
+            try: return int(x, 16)   # "0a" → 10
+            except (ValueError, TypeError): return 0
         chunk = value[byte_offset:byte_offset + byte_size]
         result = 0
         for i, b in enumerate(chunk):
-            result |= b << (8 * i)
+            result |= to_byte(b) << (8 * i)
         return result
     return 0
 
