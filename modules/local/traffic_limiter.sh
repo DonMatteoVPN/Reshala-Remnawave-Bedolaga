@@ -359,25 +359,25 @@ _tl_show_status() {
         echo ""
 
         print_separator "-" 60
-        printf_menu_option "r" "🔄 Обновить статистику (топ-10)"
-        printf_menu_option "f" "📋 Показать полный список всех IP"
-        printf_menu_option "c" "🧹 Сбросить счётчики (перезапуск)"
-        printf_menu_option "b" "🔙 Назад"
+        printf_menu_option "1" "🔄 Обновить статистику (топ-10)"
+        printf_menu_option "2" "📋 Показать полный список всех IP"
+        printf_menu_option "3" "🧹 Сбросить счётчики (перезапуск)"
+        printf_menu_option "4" "🔙 Назад"
         print_separator "-" 60
 
-        local choice; choice=$(safe_read "Выбор") || return
+        local choice; choice=$(safe_read "Выбор [1-4]") || return
         case "$choice" in
-            r|R) continue ;;
-            f|F)
+            1) continue ;;
+            2)
                 clear; menu_header "📋 Все IP — полный список"
                 python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" status --full
                 wait_for_enter ;;
-            c|C)
+            3)
                 if ask_yes_no "Перезапустить шейпер (сбросит счётчики)?" "n"; then
                     _tl_restart_ebpf_engine
                     sleep 1
                 fi ;;
-            b|B|q|Q) return ;;
+            4|b|B|q|Q) return ;;
         esac
     done
 }
@@ -400,7 +400,23 @@ _tl_view_service_log() {
 _tl_monitor_traffic() {
     ensure_package "iftop"
     local iface; iface=$(_tl_select_interface) || return
-    iftop -n -i "$iface"
+
+    # Определяем текущий лимит из конфига для заголовка
+    local limit_str="не настроен"
+    local cfg_file; cfg_file=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" status 2>/dev/null | grep 'Лимит DL' | awk '{print $NF}' || true)
+    [[ -n "$cfg_file" ]] && limit_str="${cfg_file}"
+
+    clear
+    echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_CYAN}║${C_RESET}  ${C_YELLOW}📈 Мониторинг трафика${C_RESET}  •  Интерфейс: ${C_GREEN}${iface}${C_RESET}"
+    echo -e "${C_CYAN}║${C_RESET}  Единицы: ${C_WHITE}МБ/с (байты)${C_RESET}  •  Лимит шейпера: ${C_YELLOW}${limit_str}${C_RESET}"
+    echo -e "${C_CYAN}║${C_RESET}  ${C_GRAY}Управление: [P] пауза  [J/K] скролл  [Q] выход${C_RESET}"
+    echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+    echo
+    sleep 1
+
+    # -B = байты (МБ/с вместо Мбит/с), -n = без DNS, -N = без имён портов
+    iftop -B -n -N -i "$iface"
 }
 
 _tl_select_interface() {

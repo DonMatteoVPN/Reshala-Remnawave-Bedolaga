@@ -307,7 +307,7 @@ def dump_stats(pin_dir):
                 print("\n  Остановлено.")
                 break
 
-    print(f"  {'\u2500'*60}")
+    print(f"  {_sep}")
     print(f"  Всего уникальных IP: {total_users}")
 
 
