@@ -36,6 +36,7 @@ readonly TL_CTRL_PY_PATH="${SCRIPT_DIR}/modules/local/reshala_ctrl.py"
 readonly TL_SERVICE_NAME="reshala-traffic-limiter.service"
 readonly TL_SERVICE_PATH="/etc/systemd/system/${TL_SERVICE_NAME}"
 readonly TL_OLD_APPLY_SCRIPT="/usr/local/bin/reshala-traffic-limiter-apply.sh"
+readonly TL_BPF_PIN_DIR="/sys/fs/bpf/reshala"
 
 # ============================================================ #
 # ==                      ГЛАВНОЕ МЕНЮ                      == #
@@ -128,12 +129,17 @@ _tl_cleanup_old_system() {
     systemctl disable "${TL_SERVICE_NAME}" &>/dev/null || true
     rm -f "${TL_SERVICE_PATH}" "${TL_OLD_APPLY_SCRIPT}"
     systemctl daemon-reload
-    ip -o link show up | awk -F': ' '{print $2}' | grep -v '^lo$' | while read -r iface; do
+    # Очищаем tc на всех интерфейсах
+    ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | while read -r iface; do
         tc qdisc del dev "$iface" root &>/dev/null || true
         tc qdisc del dev "$iface" clsact &>/dev/null || true
         tc qdisc del dev "$iface" ingress &>/dev/null || true
     done
-    modprobe -r ifb &>/dev/null || true
+    # Удаляем IFB интерфейс полностью (иначе "File exists" при следующем запуске)
+    ip link set dev ifb0 down &>/dev/null || true
+    ip link del dev ifb0 &>/dev/null || true
+    # Удаляем пинингованные BPF-карты (иначе "several maps match this handle")
+    rm -rf "${TL_BPF_PIN_DIR}" &>/dev/null || true
     ok "Очистка завершена."
 }
 
@@ -215,39 +221,44 @@ ExecStartPre=/sbin/modprobe ifb numifbs=1
 ExecStartPre=-/sbin/ip link add ifb0 type ifb
 ExecStartPre=/sbin/ip link set dev ifb0 up
 
-# === ОЧИСТКА СТАРЫХ ПРАВИЛ ===
+# === ОЧИСТКА СТАРЫХ ПРАВИЛ И ПИНОВ ===
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} root
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} clsact
 ExecStartPre=-/sbin/tc qdisc del dev ifb0 root
 ExecStartPre=-/sbin/tc qdisc del dev ifb0 clsact
+ExecStartPre=/bin/rm -rf ${TL_BPF_PIN_DIR}
+ExecStartPre=/bin/mkdir -p ${TL_BPF_PIN_DIR}
+
+# === ЗАГРУЗКА BPF-ПРОГРАММЫ С ПИНИНГОМ КАРТ ===
+# bpftool prog load создаёт уникальные пины карт — решает "several maps match"
+ExecStartPre=/sbin/bpftool prog load ${TL_BPF_OBJ_PATH} ${TL_BPF_PIN_DIR}/shaper_down type classifier section classifier/down pinmaps ${TL_BPF_PIN_DIR}
+ExecStartPre=/sbin/bpftool prog load ${TL_BPF_OBJ_PATH} ${TL_BPF_PIN_DIR}/shaper_up type classifier section classifier/up pinmaps ${TL_BPF_PIN_DIR}
 
 # === ОСНОВНОЙ ИНТЕРФЕЙС ===
-# root fq нужен для EDT (читает skb->tstamp и задерживает пакеты)
 ExecStartPre=/sbin/tc qdisc add dev ${IFACE} root fq
-# clsact даёт хуки egress/ingress для BPF-фильтров
 ExecStartPre=/sbin/tc qdisc add dev ${IFACE} clsact
-# Download: BPF на egress (сервер → клиент)
-ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/down
+# Download: загружаем программу из пина (не из obj — избегаем дублей карт!)
+ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action pinned ${TL_BPF_PIN_DIR}/shaper_down
 # Upload capture: перенаправляем входящий трафик на IFB
 ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress protocol all prio 1 u32 match u32 0 0 action mirred egress redirect dev ifb0
 
 # === IFB (Upload path) ===
-# root fq на ifb0 для EDT-шейпинга upload
 ExecStartPre=/sbin/tc qdisc add dev ifb0 root fq
-# clsact на ifb0 для прикрепления BPF egress-фильтра
 ExecStartPre=/sbin/tc qdisc add dev ifb0 clsact
-# Upload: BPF на egress ifb0 (клиент → сервер, перенаправлено с ingress)
-ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/up
+# Upload: загружаем программу из пина
+ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action pinned ${TL_BPF_PIN_DIR}/shaper_up
 
-# === ЗАГРУЗКА КОНФИГУРАЦИИ В BPF MAP ===
-ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN}
+# === ЗАГРУЗКА КОНФИГУРАЦИИ В BPF MAP (через pinned path) ===
+ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN} --pin-dir ${TL_BPF_PIN_DIR}
 
 # === ОСТАНОВКА ===
+ExecStop=/bin/rm -rf ${TL_BPF_PIN_DIR}
 ExecStop=-/sbin/tc qdisc del dev ${IFACE} root
 ExecStop=-/sbin/tc qdisc del dev ${IFACE} clsact
 ExecStop=-/sbin/tc qdisc del dev ifb0 root
 ExecStop=-/sbin/tc qdisc del dev ifb0 clsact
 ExecStop=-/sbin/ip link set dev ifb0 down
+ExecStop=-/sbin/ip link del dev ifb0
 
 [Install]
 WantedBy=multi-user.target
