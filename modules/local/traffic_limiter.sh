@@ -200,7 +200,7 @@ EOF
 
 _tl_generate_ebpf_service_file() {
     source "${TL_CONFIG_DIR}/ebpf_config.conf"
-    cat << EOF
+    cat <<EOF
 [Unit]
 Description=Reshala eBPF Traffic Limiter (DL/UL)
 After=network.target network-online.target
@@ -209,22 +209,45 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=-/sbin/modprobe ifb numifbs=1
-ExecStartPre=-/sbin/ip link set dev ifb0 up
+
+# === ПОДГОТОВКА IFB (для шейпинга Upload) ===
+ExecStartPre=/sbin/modprobe ifb numifbs=1
+ExecStartPre=-/sbin/ip link add ifb0 type ifb
+ExecStartPre=/sbin/ip link set dev ifb0 up
+
+# === ОЧИСТКА СТАРЫХ ПРАВИЛ ===
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} root
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} clsact
-ExecStartPre=/sbin/tc qdisc add dev ${IFACE} root fq
-ExecStartPre=/sbin/tc qdisc add dev ${IFACE} clsact
-ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/down
-ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/down
-ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress protocol all prio 1 u32 match u32 0 0 action mirred egress redirect dev ifb0
 ExecStartPre=-/sbin/tc qdisc del dev ifb0 root
+ExecStartPre=-/sbin/tc qdisc del dev ifb0 clsact
+
+# === ОСНОВНОЙ ИНТЕРФЕЙС ===
+# root fq нужен для EDT (читает skb->tstamp и задерживает пакеты)
+ExecStartPre=/sbin/tc qdisc add dev ${IFACE} root fq
+# clsact даёт хуки egress/ingress для BPF-фильтров
+ExecStartPre=/sbin/tc qdisc add dev ${IFACE} clsact
+# Download: BPF на egress (сервер → клиент)
+ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/down
+# Upload capture: перенаправляем входящий трафик на IFB
+ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress protocol all prio 1 u32 match u32 0 0 action mirred egress redirect dev ifb0
+
+# === IFB (Upload path) ===
+# root fq на ifb0 для EDT-шейпинга upload
 ExecStartPre=/sbin/tc qdisc add dev ifb0 root fq
+# clsact на ifb0 для прикрепления BPF egress-фильтра
+ExecStartPre=/sbin/tc qdisc add dev ifb0 clsact
+# Upload: BPF на egress ifb0 (клиент → сервер, перенаправлено с ingress)
 ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action obj ${TL_BPF_OBJ_PATH} sec classifier/up
+
+# === ЗАГРУЗКА КОНФИГУРАЦИИ В BPF MAP ===
 ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} set --mode ${MODE} --port ${PORT} --down ${DOWN} --up ${UP} --burst ${BURST} --win ${WIN} --pen ${PEN}
-ExecStop=/sbin/tc qdisc del dev ${IFACE} root
-ExecStop=/sbin/tc qdisc del dev ${IFACE} clsact
-ExecStop=/sbin/ip link set dev ifb0 down
+
+# === ОСТАНОВКА ===
+ExecStop=-/sbin/tc qdisc del dev ${IFACE} root
+ExecStop=-/sbin/tc qdisc del dev ${IFACE} clsact
+ExecStop=-/sbin/tc qdisc del dev ifb0 root
+ExecStop=-/sbin/tc qdisc del dev ifb0 clsact
+ExecStop=-/sbin/ip link set dev ifb0 down
 
 [Install]
 WantedBy=multi-user.target
