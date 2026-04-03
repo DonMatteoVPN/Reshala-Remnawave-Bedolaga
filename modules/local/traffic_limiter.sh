@@ -114,7 +114,7 @@ _tl_compile_bpf() {
         fi
     done
 
-    if ! clang -O2 -target bpf ${arch_include} -c "${TL_BPF_SRC_PATH}" -o "${TL_BPF_OBJ_PATH}"; then
+    if ! clang -O2 -g -target bpf ${arch_include} -c "${TL_BPF_SRC_PATH}" -o "${TL_BPF_OBJ_PATH}"; then
         err "Ошибка компиляции eBPF! Проверь наличие заголовков ядра."
         return 1
     fi
