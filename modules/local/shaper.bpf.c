@@ -187,12 +187,12 @@ static __always_inline int process_packet(struct __sk_buff *skb, __u32 config_id
     return TC_ACT_OK;
 }
 
-SEC("classifier/down")
+SEC("tc")
 int handle_down(struct __sk_buff *skb) {
     return process_packet(skb, 0, &user_state_map_down);
 }
 
-SEC("classifier/up")
+SEC("tc")
 int handle_up(struct __sk_buff *skb) {
     return process_packet(skb, 1, &user_state_map_up);
 }
