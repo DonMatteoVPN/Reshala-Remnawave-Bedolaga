@@ -162,8 +162,6 @@ wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnaw
   && reshala
 ```
 
-</details>
-
 ### Если не работает команда reshala выполни команды ниже
 
 ```bash
@@ -190,6 +188,8 @@ chmod +x /usr/local/bin/reshala
 # 4. Запуск
 reshala
 ```
+
+</details>
 
 ---
 

@@ -304,27 +304,53 @@ _tl_apply_limit_ebpf_wizard() {
     # ── Шаг 4: скорости ──
     clear; menu_header "eBPF Шейпер: Шаг 4 (Скорости)"
     _tl_show_speed_reference
-    local down_speed; down_speed=$(ask_number_in_range "Скачивание (DL) МБ/с" 1 5000 5) || return
-    local up_speed;   up_speed=$(ask_number_in_range   "Загрузка   (UL) МБ/с" 1 5000 5) || return
+    local down_speed; down_speed=$(ask_float_in_range "Скачивание (DL) МБ/с" 0.1 5000 5) || return
+    local up_speed;   up_speed=$(ask_float_in_range   "Загрузка   (UL) МБ/с" 0.1 5000 5) || return
 
     local pspeed=0.1; local burst=100; local win=10; local pen=60
     if [[ "$mode" == "2" ]]; then
-        pspeed=$(ask_number_in_range "Скорость при ШТРАФЕ (МБ/с)"   1 1000 1)  || return
-        burst=$(ask_number_in_range  "Квота на Burst (МБайт)"        1 50000 100) || return
-        win=$(ask_number_in_range    "Окно проверки (секунд)"         1 3600 10)  || return
-        pen=$(ask_number_in_range    "Длительность штрафа (секунд)"   1 3600 60)  || return
+        echo
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}⚡ Как работает система Burst + Штраф?${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_GREEN}1. Burst (квота):${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}     Пользователь качает на полной скорости (DL/UL)."
+        echo -e "  ${C_CYAN}║${C_RESET}     Шейпер считает трафик в окне X секунд."
+        echo -e "  ${C_CYAN}║${C_RESET}     Как только скачано > КВОТЫ за окно — штраф."
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}2. Штраф:${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}     Скорость резко падает до штрафной (например 0.5 МБ/с)."
+        echo -e "  ${C_CYAN}║${C_RESET}     Штраф длится N секунд, потом скорость восстанавливается."
+        echo -e "  ${C_CYAN}║${C_RESET}     Штраф 0 МБ/с = полная блокировка на время штрафа."
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Пример: квота 100 МБ в окне 10с, штраф 0.5 МБ/с на 60с."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Качальщик скачал 100 МБ за 10с → 60с сидит на 0.5 МБ/с."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Обычный пользователь (соцсети, VoIP) — не замечает.${C_RESET}"
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo
+        pspeed=$(ask_float_in_range "Штрафная скорость (МБ/с, 0=блок)"  0 1000 0.5) || return
+        burst=$(ask_number_in_range  "Квота на Burst (МБайт)"            1 50000 100) || return
+        win=$(ask_number_in_range    "Окно проверки (секунд)"             1 3600 10)   || return
+        pen=$(ask_number_in_range    "Длительность штрафа (секунд)"       0 86400 60)  || return
     fi
 
     # ── Финальная проверка ──
+    local dl_mbit; dl_mbit=$(echo "$down_speed * 8" | bc -l | xargs printf "%.1f")
+    local ul_mbit; ul_mbit=$(echo "$up_speed   * 8" | bc -l | xargs printf "%.1f")
     clear; menu_header "Финальная проверка"
     print_key_value "Правило #" "$rule_id" 25
     print_key_value "Интерфейс" "$iface" 25
     print_key_value "Режим"     "$( [[ "$mode" == "1" ]] && echo "Статика" || echo "Динамика" )" 25
     print_key_value "Порты"     "$( [[ "$ports_input" == "0" ]] && echo "ВСЕ ПОРТЫ" || echo "$ports_input" )" 25
-    print_key_value "Download"  "$down_speed МБ/с  ($(( down_speed * 8 )) Мбит/с)" 25
-    print_key_value "Upload"    "$up_speed МБ/с  ($(( up_speed * 8 )) Мбит/с)" 25
+    print_key_value "Download"  "${down_speed} МБ/с  (${dl_mbit} Мбит/с)" 25
+    print_key_value "Upload"    "${up_speed} МБ/с  (${ul_mbit} Мбит/с)" 25
+    if [[ "$mode" == "2" ]]; then
+        print_key_value "Burst"   "${burst} МБ в окне ${win}с" 25
+        print_key_value "Штраф"   "${pspeed} МБ/с на ${pen}с" 25
+    fi
     echo
     if ! ask_yes_no "Применить?"; then return; fi
+
 
     # ── Применяем ──
     if [[ "$is_active" == "false" ]]; then

@@ -315,6 +315,38 @@ ask_number_in_range() {
     done
 }
 
+# Ввод дробного числа >= min (0 разрешён если min=0)
+# Использование: ask_float_in_range "Промпт" min_val max_val default
+ask_float_in_range() {
+    local prompt="$1"
+    local min="${2:-0}"
+    local max="${3:-99999}"
+    local def="${4:-}"
+    local value
+    while true; do
+        value=$(safe_read "$prompt" "$def") || return 130
+        # Заменяем запятую на точку
+        value="${value//,/.}"
+        if [[ -z "$value" && -n "$def" ]]; then value="$def"; fi
+        if [[ -z "$value" ]]; then err "Поле не может быть пустым."; continue; fi
+        # Проверяем формат: целое или дробное число
+        if [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            # Проверяем диапазон через bc
+            if (( $(echo "$value < $min" | bc -l) )); then
+                err "Введи число >= ${min}."
+                continue
+            fi
+            if (( $(echo "$value > $max" | bc -l) )); then
+                err "Введи число <= ${max}."
+                continue
+            fi
+            echo "$value"
+            return 0
+        fi
+        err "Нужно ввести число (например: 0.5 или 3)."
+    done
+}
+
 # Безопасный ввод пароля (без вывода на экран)
 ask_password() {
     local prompt="$1"
