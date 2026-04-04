@@ -226,7 +226,6 @@ _tl_delete_rule_wizard() {
         --rules-file "${TL_CONFIG_DIR}/rules.json" \
         rules
     echo
-    local max_id=$(( MAX_RULES - 1 )) 2>/dev/null || local max_id=31
     local rule_id; rule_id=$(safe_read "Номер правила для удаления") || return
     if ! [[ "$rule_id" =~ ^[0-9]+$ ]]; then
         warn "Некорректный ID"; return
