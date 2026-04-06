@@ -158,6 +158,18 @@ def save_rules_file(rules_dict, path=DEFAULT_RULES_FILE):
 # Rule management
 # ────────────────────────────────────────────────────────────
 
+def get_mode_str(mode):
+    if mode == 1: return "Статика"
+    elif mode == 2: return "Динамика"
+    elif mode == 3: return "Общее ограничение"
+    return "Выкл"
+
+def get_mode_str_color(mode):
+    if mode == 1: return "\033[0;32mСтатика\033[0m"
+    elif mode == 2: return "\033[0;33mДинамика\033[0m"
+    elif mode == 3: return "\033[0;36mОбщее ограничение\033[0m"
+    return "\033[0;31mВыкл\033[0m"
+
 def u32_key_hex(n):
     return " ".join(f"{b:02x}" for b in struct.pack("<I", n))
 
@@ -212,7 +224,7 @@ def set_rule(pin_dir, rule_id, mode, ports_str, d_mbs, u_mbs,
         print("\n⚠️  Некоторые порты уже заняты другими правилами:\n")
         for port, rid in conflicts.items():
             saved = rules_saved.get(str(rid), {})
-            mode_str = "Статика" if saved.get('mode') == 1 else "Динамика"
+            mode_str = get_mode_str(saved.get('mode'))
             ports_str2 = ", ".join(str(p) for p in saved.get('ports', []))
             dl = saved.get('down_mbs', '?')
             ul = saved.get('up_mbs',   '?')
@@ -251,7 +263,7 @@ def set_rule(pin_dir, rule_id, mode, ports_str, d_mbs, u_mbs,
 
     ports_display = ", ".join(str(p) for p in ports_list) if ports_list else "ВСЕ ПОРТЫ"
     print(f"\n✅ Правило #{rule_id} применено:")
-    print(f"   Режим   : {'Статика' if mode == 1 else 'Динамика'}")
+    print(f"   Режим   : {get_mode_str(mode)}")
     print(f"   Порты   : {ports_display}")
     print(f"   Download: {d_mbs} МБ/с  = {d_mbs*8:.0f} Мбит/с")
     print(f"   Upload  : {u_mbs} МБ/с  = {u_mbs*8:.0f} Мбит/с")
@@ -318,7 +330,7 @@ def list_rules(pin_dir, rules_file=DEFAULT_RULES_FILE):
         print(f"  {sep}")
         return
     for rid_str, r in sorted(rules.items(), key=lambda x: int(x[0])):
-        mode_str  = "\033[0;32mСтатика\033[0m" if r['mode'] == 1 else "\033[0;33mДинамика\033[0m"
+        mode_str  = get_mode_str_color(r['mode'])
         ports_str = ", ".join(str(p) for p in r['ports']) if r['ports'] else "ВСЕ ПОРТЫ"
         print(f"  {ok} Правило \033[1;37m#{rid_str}\033[0m | {mode_str}")
         print(f"    Порты : {ports_str}")
@@ -428,7 +440,7 @@ def dump_stats(pin_dir, rule_filter=None, full=False, rules_file=DEFAULT_RULES_F
         rid = int(rid_str)
         if rule_filter is not None and rid != rule_filter:
             continue
-        mode_str  = "\033[0;32mСтатика\033[0m" if r['mode'] == 1 else "\033[0;33mДинамика\033[0m"
+        mode_str  = get_mode_str_color(r['mode'])
         ports_str = ", ".join(str(p) for p in r['ports']) if r['ports'] else "ВСЕ ПОРТЫ"
         n_users   = len(stats_by_rule.get(rid, {}))
         print(f"  {ok} Правило \033[1;37m#{rid_str}\033[0m | {mode_str} | "
@@ -450,7 +462,7 @@ def dump_stats(pin_dir, rule_filter=None, full=False, rules_file=DEFAULT_RULES_F
         d_mbs     = rule_info.get('down_mbs', 0)
         pen_mbs   = rule_info.get('pen_mbs', 0.1)
         ports_d   = ", ".join(str(p) for p in rule_info.get('ports', [])) or "ВСЕ"
-        mode_str  = "Статика" if mode == 1 else "Динамика"
+        mode_str  = get_mode_str(mode)
 
         ips_data  = stats_by_rule[rule_id]
         all_sorted = sorted(ips_data.keys(),
@@ -506,7 +518,7 @@ def build_parser():
     # set — добавить/обновить правило
     p_set = sub.add_parser("set", help="Добавить/обновить правило")
     p_set.add_argument("--rule-id", type=int, required=True, help="ID правила (0..31)")
-    p_set.add_argument("--mode",    type=int, choices=[1, 2], required=True)
+    p_set.add_argument("--mode",    type=int, choices=[1, 2, 3], required=True)
     p_set.add_argument("--ports",   type=str, default="0",
                        help="Порты через запятую (0=нет фильтрации)")
     p_set.add_argument("--down",    type=float, required=True, help="Download МБ/с")

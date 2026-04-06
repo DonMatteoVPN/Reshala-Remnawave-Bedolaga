@@ -166,6 +166,12 @@ static __always_inline int process_packet(
 
     /* ── User state (keyed by {ip, rule_id}) ── */
     user_key.rule_id = rule_id;
+    if (conf->mode == 3) {
+        user_key.addr[0] = 0;
+        user_key.addr[1] = 0;
+        user_key.addr[2] = 0;
+        user_key.addr[3] = 0;
+    }
 
     struct user_state *state = bpf_map_lookup_elem(user_map, &user_key);
     __u64 now        = bpf_ktime_get_ns();

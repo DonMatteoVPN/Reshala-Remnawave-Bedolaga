@@ -204,8 +204,9 @@ _tl_show_shaper_intro() {
     echo -e "  ${C_CYAN}║${C_RESET}  EDT = Earliest Departure Time (точное время отправки пакета)"
     echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
     echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Режимы работы${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GREEN}[1] Статический${C_RESET}: жёсткий лимит скорости всегда"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}[2] Динамический${C_RESET}: burst → квота → штраф → нормальная скорость"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GREEN}[1] Статический${C_RESET}: жёсткий лимит скорости на каждого пользователя"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}[2] Динамический${C_RESET}: burst → квота → штраф → нормальная (на каждого)"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_CYAN}[3] Общее ограничение${C_RESET}: единый канал скорости на весь порт (Shared)"
     echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
     echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Ограничения${C_RESET}"
     echo -e "  ${C_CYAN}║${C_RESET}  ${C_RED}⚠${C_RESET}  Ядро Linux >= 5.4 (bpf_ktime, EDT, clsact)"
@@ -288,16 +289,21 @@ _tl_apply_limit_ebpf_wizard() {
     echo -e "  ${C_YELLOW}💡 Выбери режим шейпинга:${C_RESET}"
     echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
     echo -e ""
-    echo -e "  ${C_GREEN}[1] Статический${C_RESET} — жёсткий лимит скорости всегда"
-    echo -e "      ${C_GRAY}Каждый пользователь получает ровно N МБ/с. Просто и предсказуемо.${C_RESET}"
+    echo -e "  ${C_GREEN}[1] Статический${C_RESET} — жёсткий лимит скорости на каждого пользователя"
+    echo -e "      ${C_GRAY}Каждый IP получает ровно N МБ/с. Просто и предсказуемо.${C_RESET}"
     echo -e "      ${C_CYAN}→ Подходит: VPN, игровые серверы, стабильное качество${C_RESET}"
     echo -e ""
     echo -e "  ${C_YELLOW}[2] Динамический${C_RESET} — burst → квота → штраф → восстановление"
     echo -e "      ${C_GRAY}Быстро до квоты, затем штрафная скорость, потом восстановление.${C_RESET}"
     echo -e "      ${C_CYAN}→ Подходит: ограничение «качальщиков», справедливое распределение${C_RESET}"
     echo -e ""
+    echo -e "  ${C_CYAN}[3] Общее ограничение${C_RESET} — единая труба на всех (Shared Pool)"
+    echo -e "      ${C_GRAY}Скорость делится между всеми IP без остатка. Если трубку в 100 МБ/с"
+    echo -e "      занимает 1 человек — он качает 100. Если 10 — качают по 10 МБ/с.${C_RESET}"
+    echo -e "      ${C_CYAN}→ Подходит: защита сервера от пропускного коллапса (DDoS)${C_RESET}"
+    echo -e ""
     echo -e "  ${C_GRAY}─────────────────────────────────────────────────────${C_RESET}"
-    local mode; mode=$(ask_number_in_range "Выбери режим" 1 2 1) || return
+    local mode; mode=$(ask_number_in_range "Выбери режим" 1 3 1) || return
 
     # ── Шаг 3: порты ──
     clear; menu_header "eBPF Шейпер: Шаг 3 (Порты)"
@@ -346,7 +352,12 @@ _tl_apply_limit_ebpf_wizard() {
     clear; menu_header "Финальная проверка"
     print_key_value "Правило #" "$rule_id" 25
     print_key_value "Интерфейс" "$iface" 25
-    print_key_value "Режим"     "$( [[ "$mode" == "1" ]] && echo "Статика" || echo "Динамика" )" 25
+    local mode_print="Неизвестно"
+    if [[ "$mode" == "1" ]]; then mode_print="Статика (на 1 юзера)"; fi
+    if [[ "$mode" == "2" ]]; then mode_print="Динамика (на 1 юзера)"; fi
+    if [[ "$mode" == "3" ]]; then mode_print="Общая труба (на всех)"; fi
+
+    print_key_value "Режим"     "$mode_print" 25
     print_key_value "Порты"     "$( [[ "$ports_input" == "0" ]] && echo "ВСЕ ПОРТЫ" || echo "$ports_input" )" 25
     print_key_value "Download"  "${down_speed} МБ/с  (${dl_mbit} Мбит/с)" 25
     print_key_value "Upload"    "${up_speed} МБ/с  (${ul_mbit} Мбит/с)" 25
