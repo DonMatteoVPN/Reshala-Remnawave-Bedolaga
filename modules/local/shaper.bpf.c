@@ -206,7 +206,7 @@ static __always_inline int process_packet(
     /* ── EDT shaping ── */
     __u64 rate = (direction == 0) ? conf->down_rate_bps : conf->up_rate_bps;
     if (conf->mode == 2 && state->is_penalized) rate = conf->penalty_rate_bps;
-    if (rate == 0) return TC_ACT_OK;
+    if (rate == 0) return TC_ACT_SHOT; /* rate 0 = drop packet (full block) */
 
     __u64 delay_ns       = ((__u64)packet_len * 1000000000ULL) / rate;
     __u64 departure_time = state->last_departure_time;
