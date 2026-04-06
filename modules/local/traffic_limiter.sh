@@ -93,9 +93,15 @@ _tl_ensure_ebpf_deps() {
     info "Проверка зависимостей для eBPF..."
     ensure_dependencies "clang" "llvm" "libbpf-dev" "bpftool" "python3" "bc" "kmod"
     local kheaders="linux-headers-$(uname -r)"
-    if ! dpkg -s "$kheaders" &>/dev/null; then
+    local kheaders_meta="linux-headers-$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+    
+    if ! dpkg -s "$kheaders" &>/dev/null && ! dpkg -s "$kheaders_meta" &>/dev/null; then
         info "Устанавливаю заголовки ядра $kheaders..."
-        apt-get update && apt-get install -y "$kheaders"
+        apt-get update
+        if ! apt-get install -y "$kheaders"; then
+            warn "Заголовки для $(uname -r) не найдены. Ставлю метапакет ${kheaders_meta}..."
+            apt-get install -y "$kheaders_meta"
+        fi
     fi
 }
 
@@ -399,6 +405,9 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+Environment=PYTHONIOENCODING=UTF-8
 
 # === ПОДГОТОВКА IFB (Upload shaping) ===
 ExecStartPre=/sbin/modprobe ifb numifbs=1

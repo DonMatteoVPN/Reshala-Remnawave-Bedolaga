@@ -261,7 +261,7 @@ scan_remnawave_state() {
             nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
             WEB_SERVER="Nginx $nginx_version (на хосте)"
         else
-            WEB_SERVER=$(ss -tlpn 2>/dev/null | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
+            WEB_SERVER=$(ss -tlpn 2>/dev/null | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\1/p')
         fi
     fi
 }
