@@ -16,6 +16,12 @@ import argparse
 import os
 import json
 
+# Принудительно ставим UTF-8, чтобы не было UnicodeEncodeError в systemd и урезанных SSH-сессиях
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 DEFAULT_PIN_DIR   = "/sys/fs/bpf/reshala/maps"
 DEFAULT_RULES_FILE = "/etc/reshala/traffic_limiter/rules.json"
 MAX_PORTS  = 32   # Must match shaper.bpf.c #define MAX_PORTS
