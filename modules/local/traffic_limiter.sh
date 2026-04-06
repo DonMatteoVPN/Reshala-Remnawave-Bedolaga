@@ -315,9 +315,26 @@ _tl_apply_limit_ebpf_wizard() {
 
     # ── Шаг 4: скорости ──
     clear; menu_header "eBPF Шейпер: Шаг 4 (Скорости)"
-    _tl_show_speed_reference
-    local down_speed; down_speed=$(ask_float_in_range "Скачивание (DL) МБ/с" 0.1 5000 5) || return
-    local up_speed;   up_speed=$(ask_float_in_range   "Загрузка   (UL) МБ/с" 0.1 5000 5) || return
+    
+    local dflt_speed=5
+    if [[ "$mode" == "3" ]]; then
+        dflt_speed=100
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}🌍 Справка по скоростям ОБЩЕГО ОГРАНИЧЕНИЯ (Shared)${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Внимание: эта скорость делится на ВСЕХ пользователей порта.${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Рекомендуется указывать суммарную емкость канала.${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  50 МБ/с   = ~400 Мбит/с  (хватит на ~10-20 юзеров)"
+        echo -e "  ${C_CYAN}║${C_RESET}  100 МБ/с  = ~800 Мбит/с  (хватит на ~20-50 юзеров)"
+        echo -e "  ${C_CYAN}║${C_RESET}  500 МБ/с  = ~4 Гбит/с    (серьёзный узел)"
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo
+    else
+        _tl_show_speed_reference
+    fi
+    
+    local down_speed; down_speed=$(ask_float_in_range "Скачивание (DL) МБ/с" 0.1 50000 $dflt_speed) || return
+    local up_speed;   up_speed=$(ask_float_in_range   "Загрузка   (UL) МБ/с" 0.1 50000 $dflt_speed) || return
 
     local pspeed=0.1; local burst=100; local win=10; local pen=60
     if [[ "$mode" == "2" ]]; then
