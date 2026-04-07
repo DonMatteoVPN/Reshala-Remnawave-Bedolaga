@@ -541,41 +541,32 @@ _tl_generate_ebpf_service_file() {
     local PIN_PROGS="${TL_BPF_PIN_DIR}/progs"
     local PIN_MAPS="${TL_BPF_PIN_DIR}/maps"
 
-    # Находим пути к бинарникам динамически (с ГЛУБОКИМ поиском для bpftool)
-    local bpftool_path; 
-    bpftool_path=$(which bpftool 2>/dev/null)
-    
+    # 1. Сначала находим все пути (БЕЗ вывода в stdout)
+    local bpftool_path; bpftool_path=$(which bpftool 2>/dev/null)
     if [[ -z "$bpftool_path" ]]; then
-        # Если bpftool не в PATH — ищем по специфическим папкам Ubuntu/Debian
-        local possible_bpftool=(
-            "/usr/lib/linux-tools/$(uname -r)/bpftool"
-            "/usr/lib/linux-tools-$(uname -r)/bpftool"
-            "/usr/lib/linux-tools-generic/bpftool"
-            "/usr/sbin/bpftool"
-            "/usr/bin/bpftool"
-            "/sbin/bpftool"
-        )
-        for p in "${possible_bpftool[@]}"; do
-            if [[ -x "$p" ]]; then bpftool_path="$p"; break; fi
+        local p
+        for p in "/usr/lib/linux-tools/$(uname -r)/bpftool" \
+                 "/usr/lib/linux-tools-$(uname -r)/bpftool" \
+                 "/usr/lib/linux-tools-generic/bpftool" \
+                 "/usr/sbin/bpftool" "/usr/bin/bpftool" "/sbin/bpftool"; do
+            [[ -x "$p" ]] && { bpftool_path="$p"; break; }
         done
-        
-        # Если все еще пусто — ищем через find (последний шанс)
-        if [[ -z "$bpftool_path" ]]; then
-            bpftool_path=$(find /usr/lib/linux-tools/ -name bpftool -type f -executable 2>/dev/null | head -n 1)
-        fi
+        [[ -z "$bpftool_path" ]] && bpftool_path=$(find /usr/lib/linux-tools/ -name bpftool -type f -executable 2>/dev/null | head -n 1)
     fi
 
+    # 2. Если критический бинарник не найден — выходим с ошибкой в STDERR
     if [[ -z "$bpftool_path" ]]; then
-        err "ОШИБКА: bpftool не найден на сервере! Попробуй: apt install linux-tools-common linux-tools-$(uname -r)"
+        echo -e "${C_RED}[✗] ОШИБКА: bpftool не найден!${C_RESET}" >&2
         return 1
     fi
 
-    local tc_path; tc_path=$(which tc || echo "/sbin/tc")
-    local sysctl_path; sysctl_path=$(which sysctl || echo "/sbin/sysctl")
-    local rm_path; rm_path=$(which rm || echo "/bin/rm")
-    local mkdir_path; mkdir_path=$(which mkdir || echo "/bin/mkdir")
-    local python_path; python_path=$(which python3 || echo "/usr/bin/python3")
+    local tc_path;     tc_path=$(which tc 2>/dev/null || echo "/sbin/tc")
+    local sysctl_path; sysctl_path=$(which sysctl 2>/dev/null || echo "/sbin/sysctl")
+    local rm_path;     rm_path=$(which rm 2>/dev/null || echo "/bin/rm")
+    local mkdir_path;  mkdir_path=$(which mkdir 2>/dev/null || echo "/bin/mkdir")
+    local python_path; python_path=$(which python3 2>/dev/null || echo "/usr/bin/python3")
 
+    # 3. Только теперь генерируем чистый конфиг в stdout
     cat <<EOF
 [Unit]
 Description=Reshala eBPF Traffic Limiter (Multi-Rule)
