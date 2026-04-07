@@ -117,8 +117,8 @@ _tl_ensure_ebpf_deps() {
         info "Устанавливаю bpftool..."
         if [[ -f /etc/debian_version ]]; then
             apt-get update
-            # Попытка установить как стандартный пакет, так и привязанный к ядру
-            apt-get install -y bpftool linux-tools-common "linux-tools-$(uname -r)" || true
+            # Ubuntu часто требует linux-tools-generic для работы bpftool
+            apt-get install -y bpftool linux-tools-common linux-tools-generic "linux-tools-$(uname -r)" || true
         else
             ensure_dependencies "bpftool"
         fi
@@ -541,13 +541,15 @@ _tl_generate_ebpf_service_file() {
     local PIN_PROGS="${TL_BPF_PIN_DIR}/progs"
     local PIN_MAPS="${TL_BPF_PIN_DIR}/maps"
 
-    # Находим пути к бинарникам динамически (с расширенным поиском для bpftool)
+    # Находим пути к бинарникам динамически (с ГЛУБОКИМ поиском для bpftool)
     local bpftool_path; 
     bpftool_path=$(which bpftool 2>/dev/null)
+    
     if [[ -z "$bpftool_path" ]]; then
-        # Ubuntu часто прячет bpftool здесь:
+        # Если bpftool не в PATH — ищем по специфическим папкам Ubuntu/Debian
         local possible_bpftool=(
             "/usr/lib/linux-tools/$(uname -r)/bpftool"
+            "/usr/lib/linux-tools-$(uname -r)/bpftool"
             "/usr/lib/linux-tools-generic/bpftool"
             "/usr/sbin/bpftool"
             "/usr/bin/bpftool"
@@ -556,8 +558,17 @@ _tl_generate_ebpf_service_file() {
         for p in "${possible_bpftool[@]}"; do
             if [[ -x "$p" ]]; then bpftool_path="$p"; break; fi
         done
+        
+        # Если все еще пусто — ищем через find (последний шанс)
+        if [[ -z "$bpftool_path" ]]; then
+            bpftool_path=$(find /usr/lib/linux-tools/ -name bpftool -type f -executable 2>/dev/null | head -n 1)
+        fi
     fi
-    [[ -z "$bpftool_path" ]] && bpftool_path="/usr/sbin/bpftool" # Последний шанс
+
+    if [[ -z "$bpftool_path" ]]; then
+        err "ОШИБКА: bpftool не найден на сервере! Попробуй: apt install linux-tools-common linux-tools-$(uname -r)"
+        return 1
+    fi
 
     local tc_path; tc_path=$(which tc || echo "/sbin/tc")
     local sysctl_path; sysctl_path=$(which sysctl || echo "/sbin/sysctl")
