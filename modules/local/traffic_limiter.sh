@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================ #
 # ==                 МОДУЛЬ ШЕЙПЕРА ТРАФИКА                 == #
-# ==                      VERSION 3.1 (eBPF)                 == #
+# ==                      VERSION 3.2 (HighLoad)             == #
 # ============================================================ #
 #
 # Отвечает за современное ограничение скорости с использованием
@@ -9,8 +9,8 @@
 # Обеспечивает 0% коллизий, поддержку IPv6 и раздельный лимит DL/UL.
 #
 # ВЕРСИОНИРОВАНИЕ:
+#   v3.2 (07.04.2026) - Удален IFB0, переход на Ingress Drop (10 Gbit/s Ready)
 #   v3.1 (29.03.2025) - Исправлены ошибки компиляции, добавлен раздельный DL/UL
-#   v3.0 (29.03.2025) - Переход на eBPF + EDT (0% коллизий, IPv6)
 #
 #  ( РОДИТЕЛЬ | КЛАВИША | НАЗВАНИЕ | ФУНКЦИЯ | ПОРЯДОК | ГРУППА | ОПИСАНИЕ )
 # @menu.manifest
@@ -28,7 +28,7 @@ source "$SCRIPT_DIR/modules/core/dependencies.sh"
 # ==                  ГЛОБАЛЬНАЯ КОНФИГУРАЦИЯ               == #
 # ============================================================ #
 
-readonly TL_MODULE_VERSION="3.1 (eBPF)"
+readonly TL_MODULE_VERSION="3.2 (HighLoad)"
 readonly TL_CONFIG_DIR="/etc/reshala/traffic_limiter"
 readonly TL_BPF_SRC_PATH="${SCRIPT_DIR}/modules/local/shaper.bpf.c"
 readonly TL_BPF_OBJ_PATH="${TL_CONFIG_DIR}/shaper.bpf.o"
@@ -153,10 +153,32 @@ _tl_cleanup_old_system() {
 }
 
 _tl_show_listening_ports_smart() {
-    info "Активные порты прямо сейчас:"
-    echo "------------------------------------------------------------"
-    ss -tulnp | grep LISTEN | awk '{print $5, $7}' | sed 's/::://g; s/0.0.0.0://g' | awk -F'[: ]' '{print "  • Порт:", $2, "->", $3}' | sort -u
-    echo "------------------------------------------------------------"
+    echo -e "  ${C_CYAN}[i] Подсказка: Эта таблица показывает запущенные на сервере сервисы.${C_RESET}"
+    echo -e "  ${C_GRAY}    • Если вы видите${C_RESET} xray ${C_GRAY}или${C_RESET} v2ray ${C_GRAY}— это порт вашего VPN, его нужно шейпить.${C_RESET}"
+    echo -e "  ${C_GRAY}    • Если вы видите${C_RESET} sshd ${C_GRAY}— это порт консоли сервера. Лучше его не трогать,${C_RESET}"
+    echo -e "  ${C_GRAY}      иначе при скачивании у вас начнёт лагать терминал!${C_RESET}"
+    echo -e "  ${C_CYAN}Активные порты прямо сейчас:${C_RESET}"
+    echo "  ------------------------------------------------------------"
+    
+    # Надежный парсинг вывода ss -tulnp
+    ss -tulnp | grep LISTEN | while read -r line; do
+        # Берем IP:Port (5-я колонка) и инфу о процессе (последняя колонка)
+        local_add_port=$(echo "$line" | awk '{print $5}')
+        proc_info=$(echo "$line" | awk '{print $NF}')
+        
+        # Порт — всё что после последнего двоеточия
+        port="${local_add_port##*:}"
+        
+        # Название процесса — вытаскиваем между первыми кавычками "имя"
+        proc_name=$(echo "$proc_info" | grep -o '("[^"]*"' | head -n1 | tr -d '"(')
+        
+        # Защита от пустых имен
+        [ -z "$proc_name" ] && proc_name="Системный/Неизвестен"
+        
+        echo -e "    • Порт: ${C_YELLOW}${port}${C_RESET}  —>  слушает ${C_GREEN}${proc_name}${C_RESET}"
+    done | sort -u -t: -k2 -n
+    
+    echo "  ------------------------------------------------------------"
 }
 
 _tl_show_speed_reference() {
@@ -186,7 +208,7 @@ _tl_show_speed_reference() {
 
 _tl_show_shaper_intro() {
     echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}⚡ Reshala eBPF Traffic Shaper v3.1${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}⚡ Reshala eBPF Traffic Shaper v3.2 (HighLoad)${C_RESET}"
     echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
     echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Что это?${C_RESET}"
     echo -e "  ${C_CYAN}║${C_RESET}  Ограничитель скорости на базе ${C_YELLOW}eBPF + EDT${C_RESET} (Linux ядро)"
