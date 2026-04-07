@@ -28,8 +28,7 @@ source "$SCRIPT_DIR/modules/core/dependencies.sh"
 # ==                  ГЛОБАЛЬНАЯ КОНФИГУРАЦИЯ               == #
 # ============================================================ #
 
-readonly TL_MODULE_VERSION="3.2 (HighLoad)"
-readonly VERSION="v2.9997"
+readonly TL_MODULE_VERSION="v2.9998"
 readonly TL_CONFIG_DIR="/etc/reshala/traffic_limiter"
 readonly TL_BPF_SRC_PATH="${SCRIPT_DIR}/modules/local/shaper.bpf.c"
 readonly TL_BPF_OBJ_PATH="${TL_CONFIG_DIR}/shaper.bpf.o"
@@ -637,10 +636,10 @@ Environment=PYTHONIOENCODING=UTF-8
 # === СИСТЕМНЫЕ ТРЕБОВАНИЯ ===
 ExecStartPre=-${sysctl_path} -w kernel.unprivileged_bpf_disabled=0
 
-# === ОЧИСТКА ===
+# === ОЧИСТКА (Агрессивная) ===
 ExecStartPre=-${tc_path} qdisc del dev ${IFACE} root
 ExecStartPre=-${tc_path} qdisc del dev ${IFACE} clsact
-ExecStartPre=${rm_path} -rf ${TL_BPF_PIN_DIR}
+ExecStartPre=-${rm_path} -rf ${TL_BPF_PIN_DIR}
 ExecStartPre=${mkdir_path} -p ${PIN_PROGS} ${PIN_MAPS}
 
 # === ЗАГРУЗКА BPF-ПРОГРАММ ===
