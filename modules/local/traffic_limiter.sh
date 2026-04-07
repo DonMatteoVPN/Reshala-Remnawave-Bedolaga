@@ -648,8 +648,8 @@ ExecStartPre=${bpftool_path} prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} type c
 # === ИНТЕРФЕЙС ${IFACE} ===
 ExecStartPre=${tc_path} qdisc add dev ${IFACE} root fq
 ExecStartPre=${tc_path} qdisc add dev ${IFACE} clsact
-ExecStartPre=${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/handle_down
-ExecStartPre=${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/handle_up
+ExecStartPre=${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/cls_down
+ExecStartPre=${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/cls_up
 
 # === ВОССТАНОВЛЕНИЕ ВСЕХ ПРАВИЛ ИЗ rules.json ===
 ExecStart=${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore

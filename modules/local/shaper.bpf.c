@@ -253,13 +253,13 @@ static __always_inline int process_packet(
     return TC_ACT_OK;
 }
 
-SEC("handle_down")
-int handle_down(struct __sk_buff *skb) {
+SEC("cls_down")
+int reshala_handle_down(struct __sk_buff *skb) {
     return process_packet(skb, 0, &user_state_map_down);
 }
 
-SEC("handle_up")
-int handle_up(struct __sk_buff *skb) {
+SEC("cls_up")
+int reshala_handle_up(struct __sk_buff *skb) {
     return process_packet(skb, 1, &user_state_map_up);
 }
 
