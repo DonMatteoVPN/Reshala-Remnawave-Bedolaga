@@ -253,12 +253,12 @@ static __always_inline int process_packet(
     return TC_ACT_OK;
 }
 
-SEC("tc")
+SEC("classifier")
 int handle_down(struct __sk_buff *skb) {
     return process_packet(skb, 0, &user_state_map_down);
 }
 
-SEC("tc")
+SEC("classifier")
 int handle_up(struct __sk_buff *skb) {
     return process_packet(skb, 1, &user_state_map_up);
 }

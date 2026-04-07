@@ -29,6 +29,7 @@ source "$SCRIPT_DIR/modules/core/dependencies.sh"
 # ============================================================ #
 
 readonly TL_MODULE_VERSION="3.2 (HighLoad)"
+readonly VERSION="v2.9997"
 readonly TL_CONFIG_DIR="/etc/reshala/traffic_limiter"
 readonly TL_BPF_SRC_PATH="${SCRIPT_DIR}/modules/local/shaper.bpf.c"
 readonly TL_BPF_OBJ_PATH="${TL_CONFIG_DIR}/shaper.bpf.o"
@@ -114,13 +115,25 @@ _tl_ensure_ebpf_deps() {
     ensure_dependencies "clang" "llvm" "libbpf-dev" "python3" "bc" "kmod"
     
     if ! which bpftool &>/dev/null; then
-        info "Устанавливаю bpftool..."
+        info "Авто-Хирург: Пытаюсь установить bpftool..."
         if [[ -f /etc/debian_version ]]; then
             apt-get update
-            # Ubuntu часто требует linux-tools-generic или linux-tools-virtual для работы bpftool
+            apt-get install -y -f || true # Починить зависимости
             apt-get install -y bpftool linux-tools-common linux-tools-generic linux-tools-virtual linux-cloud-tools-virtual "linux-tools-$(uname -r)" || true
         else
             ensure_dependencies "bpftool"
+        fi
+        
+        # Сразу проверяем еще раз
+        if ! which bpftool &>/dev/null; then
+             # Попытка найти во всех возможных папках
+             local p
+             for p in "/usr/lib/linux-tools/$(uname -r)/bpftool" "/usr/lib/linux-tools-$(uname -r)/bpftool" "/usr/lib/linux-tools-generic/bpftool"; do
+                 if [[ -x "$p" ]]; then
+                     ln -sf "$p" /usr/local/bin/bpftool 2>/dev/null || true
+                     break
+                 fi
+             done
         fi
     fi
 
@@ -574,12 +587,24 @@ _tl_generate_ebpf_service_file() {
         fi
     fi
 
-    # 2. Если критический бинарник не найден — выходим с диагностикой в STDERR
+    # 2. Если критический бинарник не найден — выходим с ЯДЕРНЫМ ПРЕДУПРЕЖДЕНИЕМ
     if [[ -z "$bpftool_path" ]]; then
-        echo -e "${C_RED}[✗] ОШИБКА: bpftool не найден ни в стандартных путях, ни через поиск!${C_RESET}" >&2
-        echo -e "${C_YELLOW}Диагностика репозитория:${C_RESET}" >&2
-        apt-cache search bpftool | grep bpftool >&2
-        echo -e "\n${C_CYAN}Рекомендация:${C_RESET} Попробуй вручную: apt update && apt install linux-tools-common && apt install linux-tools-\$(uname -r)" >&2
+        cat <<EOF >&2
+${C_RED}╔════════════════════════════════════════════════════════════╗${C_RESET}
+${C_RED}║ 🔥 ЯДЕРНОЕ ПРЕДУПРЕЖДЕНИЕ: BPFTOOL НЕ НАЙДЕН!             ║${C_RESET}
+${C_RED}╠════════════════════════════════════════════════════════════╣${C_RESET}
+${C_WHITE}║ Твое ядро или репозиторий блокируют установку BPF-пакетов. ║${C_RESET}
+${C_WHITE}║ Решала пытался поставить их сам, но система отказала.      ║${C_RESET}
+${C_WHITE}║                                                            ║${C_RESET}
+${C_CYAN}║ ЧТО ТЕБЕ НУЖНО СДЕЛАТЬ СЕЙЧАС (ВРУЧНУЮ):                   ║${C_RESET}
+${C_YELLOW}║ 1. apt update                                              ║${C_RESET}
+${C_YELLOW}║ 2. apt install -y linux-tools-common                       ║${C_RESET}
+${C_YELLOW}║ 3. apt install -y linux-tools-\$(uname -r)                   ║${C_RESET}
+${C_WHITE}║                                                            ║${C_RESET}
+${C_WHITE}║ Если ошибка повторится — твой хостинг зарезал поддержку    ║${C_RESET}
+${C_WHITE}║ eBPF на уровне ядра. В этом случае шейпер не запустится.    ║${C_RESET}
+${C_RED}╚════════════════════════════════════════════════════════════╝${C_RESET}
+EOF
         return 1
     fi
 
