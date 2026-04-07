@@ -187,7 +187,11 @@ static __always_inline int process_packet(
         return TC_ACT_OK;
     }
 
-    __sync_fetch_and_add(&state->total_bytes, packet_len);
+    if (conf->mode == 3) {
+        state->total_bytes += packet_len;
+    } else {
+        __sync_fetch_and_add(&state->total_bytes, packet_len);
+    }
 
     /* ── Dynamic burst/penalty logic ── */
     if (conf->mode == 2) {
@@ -214,15 +218,30 @@ static __always_inline int process_packet(
     if (conf->mode == 2 && state->is_penalized) rate = conf->penalty_rate_bps;
     if (rate == 0) return TC_ACT_SHOT; /* rate 0 = drop packet (full block) */
 
-    __u64 delay_ns       = ((__u64)packet_len * 1000000000ULL) / rate;
-    __u64 departure_time = state->last_departure_time;
-    if (now > departure_time) departure_time = now;
-    departure_time += delay_ns;
+    if (direction == 0) {
+        /* ── Egress (Download): EDT shaping ── */
+        __u64 delay_ns       = ((__u64)packet_len * 1000000000ULL) / rate;
+        __u64 departure_time = state->last_departure_time;
+        if (now > departure_time) departure_time = now;
+        departure_time += delay_ns;
 
-    if (departure_time - now > 2000000000ULL) return TC_ACT_SHOT; /* > 2s ahead → drop */
+        if (departure_time - now > 2000000000ULL) return TC_ACT_SHOT; /* > 2s ahead → drop */
 
-    state->last_departure_time = departure_time;
-    skb->tstamp = departure_time;
+        state->last_departure_time = departure_time;
+        skb->tstamp = departure_time;
+    } else {
+        /* ── Ingress (Upload): Token Bucket Drop ── */
+        __u64 delay_ns       = ((__u64)packet_len * 1000000000ULL) / rate;
+        __u64 departure_time = state->last_departure_time;
+        if (now > departure_time) departure_time = now;
+        
+        /* 200ms burst buffer. If we push the bucket $>200ms into the future, we drop. */
+        if (departure_time - now > 200000000ULL) {
+            return TC_ACT_SHOT; /* TCP window reduction */
+        }
+        
+        state->last_departure_time = departure_time + delay_ns;
+    }
 
     return TC_ACT_OK;
 }

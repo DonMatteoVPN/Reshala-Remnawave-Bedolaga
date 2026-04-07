@@ -103,6 +103,7 @@ _tl_ensure_ebpf_deps() {
             apt-get install -y "$kheaders_meta"
         fi
     fi
+    sysctl -w kernel.unprivileged_bpf_disabled=0 &>/dev/null || true
 }
 
 _tl_compile_bpf() {
@@ -145,10 +146,8 @@ _tl_cleanup_old_system() {
         tc qdisc del dev "$iface" clsact &>/dev/null || true
         tc qdisc del dev "$iface" ingress &>/dev/null || true
     done
-    # Удаляем IFB интерфейс полностью (иначе "File exists" при следующем запуске)
-    ip link set dev ifb0 down &>/dev/null || true
-    ip link del dev ifb0 &>/dev/null || true
-    # Удаляем пинингованные BPF-карты (иначе "several maps match this handle")
+    
+    # Удаляем BPF-карты (иначе "several maps match this handle")
     rm -rf "${TL_BPF_PIN_DIR}" &>/dev/null || true
     ok "Очистка завершена."
 }
@@ -437,16 +436,12 @@ Environment=LANG=C.UTF-8
 Environment=LC_ALL=C.UTF-8
 Environment=PYTHONIOENCODING=UTF-8
 
-# === ПОДГОТОВКА IFB (Upload shaping) ===
-ExecStartPre=/sbin/modprobe ifb numifbs=1
-ExecStartPre=-/sbin/ip link add ifb0 type ifb
-ExecStartPre=/sbin/ip link set dev ifb0 up
+# === СИСТЕМНЫЕ ТРЕБОВАНИЯ ===
+ExecStartPre=-/sbin/sysctl -w kernel.unprivileged_bpf_disabled=0
 
 # === ОЧИСТКА ===
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} root
 ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} clsact
-ExecStartPre=-/sbin/tc qdisc del dev ifb0 root
-ExecStartPre=-/sbin/tc qdisc del dev ifb0 clsact
 ExecStartPre=/bin/rm -rf ${TL_BPF_PIN_DIR}
 ExecStartPre=/bin/mkdir -p ${PIN_PROGS} ${PIN_MAPS}
 
@@ -457,12 +452,7 @@ ExecStartPre=/sbin/bpftool prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} pinmaps 
 ExecStartPre=/sbin/tc qdisc add dev ${IFACE} root fq
 ExecStartPre=/sbin/tc qdisc add dev ${IFACE} clsact
 ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/handle_down
-ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress protocol all prio 1 u32 match u32 0 0 action mirred egress redirect dev ifb0
-
-# === IFB (Upload path) ===
-ExecStartPre=/sbin/tc qdisc add dev ifb0 root fq
-ExecStartPre=/sbin/tc qdisc add dev ifb0 clsact
-ExecStartPre=/sbin/tc filter add dev ifb0 egress bpf direct-action pinned ${PIN_PROGS}/handle_up
+ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/handle_up
 
 # === ВОССТАНОВЛЕНИЕ ВСЕХ ПРАВИЛ ИЗ rules.json ===
 ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore
@@ -471,10 +461,6 @@ ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file
 ExecStop=/bin/rm -rf ${TL_BPF_PIN_DIR}
 ExecStop=-/sbin/tc qdisc del dev ${IFACE} root
 ExecStop=-/sbin/tc qdisc del dev ${IFACE} clsact
-ExecStop=-/sbin/tc qdisc del dev ifb0 root
-ExecStop=-/sbin/tc qdisc del dev ifb0 clsact
-ExecStop=-/sbin/ip link set dev ifb0 down
-ExecStop=-/sbin/ip link del dev ifb0
 
 [Install]
 WantedBy=multi-user.target
