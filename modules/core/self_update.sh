@@ -158,8 +158,20 @@ check_for_updates() {
     if _self_update_is_remote_newer "$VERSION" "$remote_ver"; then
         UPDATE_AVAILABLE=1; LATEST_VERSION="$remote_ver"
         log "[ОБНОВЛЕНИЕ] Доступно: ${VERSION} -> ${remote_ver}"
+        
+        # Получаем текст последнего коммита (что нового)
+        local commit_api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${REPO_BRANCH}"
+        local commit_msg
+        commit_msg=$(curl -s -L --connect-timeout 8 --max-time 12 "$commit_api_url" 2>/dev/null \
+            | jq -r 'if type=="array" then .[0].commit.message else .commit.message end' 2>/dev/null)
+        
+        if [[ -n "$commit_msg" && "$commit_msg" != "null" ]]; then
+            LATEST_COMMIT_MESSAGE="$commit_msg"
+        else
+            LATEST_COMMIT_MESSAGE=""
+        fi
     else
-        UPDATE_AVAILABLE=0; LATEST_VERSION=""
+        UPDATE_AVAILABLE=0; LATEST_VERSION=""; LATEST_COMMIT_MESSAGE=""
     fi
 }
 

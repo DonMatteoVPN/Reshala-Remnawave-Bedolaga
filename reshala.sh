@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.98 - РЕФАКТОРИНГ МЕНЮ        == #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.99 - РЕФАКТОРИНГ МЕНЮ        == #
 # ============================================================ #
 #
 # Точка входа. Этот скрипт — прораб. Он только отдаёт команды
@@ -22,7 +22,7 @@ while [ -h "$SOURCE" ]; do
 done
 export SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 
-readonly VERSION="v2.98"
+readonly VERSION="v2.99"
 
 # ============================================================ #
 #              ПОДГОТОВКА И ЗАГРУЗКА КОМПОНЕНТОВ               #
@@ -149,9 +149,24 @@ show_main_menu() {
             case "$choice" in
                 u|U)
                     if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
+                        if [[ -n "${LATEST_COMMIT_MESSAGE:-}" ]]; then
+                            clear
+                            echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════${C_RESET}"
+                            echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}⚡ ЧТО НОВОГО В ЭТОМ ОБНОВЛЕНИИ?${C_RESET}  (${LATEST_VERSION})"
+                            echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════${C_RESET}"
+                            
+                            # Выводим сообщение коммита построчно
+                            while read -r line; do
+                                echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}${line}${C_RESET}"
+                            done <<< "$LATEST_COMMIT_MESSAGE"
+                            
+                            echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════${C_RESET}"
+                            echo
+                            echo -e "  Нажми ${C_BOLD}[Enter]${C_RESET}, чтобы начать обновление..."
+                            read -r _
+                        fi
                         run_module core/self_update run_update
                     else
-                        # Если пункт не отображается, это неверный ввод
                         printf_error "Нет такого пункта."
                     fi
                     ;;
