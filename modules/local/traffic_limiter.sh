@@ -111,7 +111,19 @@ show_traffic_limiter_menu() {
 
 _tl_ensure_ebpf_deps() {
     info "Проверка зависимостей для eBPF..."
-    ensure_dependencies "clang" "llvm" "libbpf-dev" "bpftool" "python3" "bc" "kmod"
+    ensure_dependencies "clang" "llvm" "libbpf-dev" "python3" "bc" "kmod"
+    
+    if ! which bpftool &>/dev/null; then
+        info "Устанавливаю bpftool..."
+        if [[ -f /etc/debian_version ]]; then
+            apt-get update
+            # Попытка установить как стандартный пакет, так и привязанный к ядру
+            apt-get install -y bpftool linux-tools-common "linux-tools-$(uname -r)" || true
+        else
+            ensure_dependencies "bpftool"
+        fi
+    fi
+
     local kheaders="linux-headers-$(uname -r)"
     local kheaders_meta="linux-headers-$(dpkg --print-architecture 2>/dev/null || echo amd64)"
     
@@ -529,8 +541,24 @@ _tl_generate_ebpf_service_file() {
     local PIN_PROGS="${TL_BPF_PIN_DIR}/progs"
     local PIN_MAPS="${TL_BPF_PIN_DIR}/maps"
 
-    # Находим пути к бинарникам динамически
-    local bpftool_path; bpftool_path=$(which bpftool || echo "/usr/sbin/bpftool")
+    # Находим пути к бинарникам динамически (с расширенным поиском для bpftool)
+    local bpftool_path; 
+    bpftool_path=$(which bpftool 2>/dev/null)
+    if [[ -z "$bpftool_path" ]]; then
+        # Ubuntu часто прячет bpftool здесь:
+        local possible_bpftool=(
+            "/usr/lib/linux-tools/$(uname -r)/bpftool"
+            "/usr/lib/linux-tools-generic/bpftool"
+            "/usr/sbin/bpftool"
+            "/usr/bin/bpftool"
+            "/sbin/bpftool"
+        )
+        for p in "${possible_bpftool[@]}"; do
+            if [[ -x "$p" ]]; then bpftool_path="$p"; break; fi
+        done
+    fi
+    [[ -z "$bpftool_path" ]] && bpftool_path="/usr/sbin/bpftool" # Последний шанс
+
     local tc_path; tc_path=$(which tc || echo "/sbin/tc")
     local sysctl_path; sysctl_path=$(which sysctl || echo "/sbin/sysctl")
     local rm_path; rm_path=$(which rm || echo "/bin/rm")
