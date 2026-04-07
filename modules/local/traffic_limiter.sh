@@ -528,6 +528,15 @@ _tl_generate_ebpf_service_file() {
     source "${TL_CONFIG_DIR}/ebpf_config.conf"
     local PIN_PROGS="${TL_BPF_PIN_DIR}/progs"
     local PIN_MAPS="${TL_BPF_PIN_DIR}/maps"
+
+    # Находим пути к бинарникам динамически
+    local bpftool_path; bpftool_path=$(which bpftool || echo "/usr/sbin/bpftool")
+    local tc_path; tc_path=$(which tc || echo "/sbin/tc")
+    local sysctl_path; sysctl_path=$(which sysctl || echo "/sbin/sysctl")
+    local rm_path; rm_path=$(which rm || echo "/bin/rm")
+    local mkdir_path; mkdir_path=$(which mkdir || echo "/bin/mkdir")
+    local python_path; python_path=$(which python3 || echo "/usr/bin/python3")
+
     cat <<EOF
 [Unit]
 Description=Reshala eBPF Traffic Limiter (Multi-Rule)
@@ -542,30 +551,30 @@ Environment=LC_ALL=C.UTF-8
 Environment=PYTHONIOENCODING=UTF-8
 
 # === СИСТЕМНЫЕ ТРЕБОВАНИЯ ===
-ExecStartPre=-/sbin/sysctl -w kernel.unprivileged_bpf_disabled=0
+ExecStartPre=-${sysctl_path} -w kernel.unprivileged_bpf_disabled=0
 
 # === ОЧИСТКА ===
-ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} root
-ExecStartPre=-/sbin/tc qdisc del dev ${IFACE} clsact
-ExecStartPre=/bin/rm -rf ${TL_BPF_PIN_DIR}
-ExecStartPre=/bin/mkdir -p ${PIN_PROGS} ${PIN_MAPS}
+ExecStartPre=-${tc_path} qdisc del dev ${IFACE} root
+ExecStartPre=-${tc_path} qdisc del dev ${IFACE} clsact
+ExecStartPre=${rm_path} -rf ${TL_BPF_PIN_DIR}
+ExecStartPre=${mkdir_path} -p ${PIN_PROGS} ${PIN_MAPS}
 
 # === ЗАГРУЗКА BPF-ПРОГРАММ ===
-ExecStartPre=/sbin/bpftool prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} pinmaps ${PIN_MAPS}
+ExecStartPre=${bpftool_path} prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} pinmaps ${PIN_MAPS}
 
 # === ИНТЕРФЕЙС ${IFACE} ===
-ExecStartPre=/sbin/tc qdisc add dev ${IFACE} root fq
-ExecStartPre=/sbin/tc qdisc add dev ${IFACE} clsact
-ExecStartPre=/sbin/tc filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/handle_down
-ExecStartPre=/sbin/tc filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/handle_up
+ExecStartPre=${tc_path} qdisc add dev ${IFACE} root fq
+ExecStartPre=${tc_path} qdisc add dev ${IFACE} clsact
+ExecStartPre=${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/handle_down
+ExecStartPre=${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/handle_up
 
 # === ВОССТАНОВЛЕНИЕ ВСЕХ ПРАВИЛ ИЗ rules.json ===
-ExecStart=/usr/bin/python3 ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore
+ExecStart=${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore
 
 # === ОСТАНОВКА ===
-ExecStop=/bin/rm -rf ${TL_BPF_PIN_DIR}
-ExecStop=-/sbin/tc qdisc del dev ${IFACE} root
-ExecStop=-/sbin/tc qdisc del dev ${IFACE} clsact
+ExecStop=${rm_path} -rf ${TL_BPF_PIN_DIR}
+ExecStop=-${tc_path} qdisc del dev ${IFACE} root
+ExecStop=-${tc_path} qdisc del dev ${IFACE} clsact
 
 [Install]
 WantedBy=multi-user.target
