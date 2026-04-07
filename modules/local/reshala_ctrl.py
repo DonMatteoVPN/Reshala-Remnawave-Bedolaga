@@ -449,22 +449,27 @@ def dump_stats(pin_dir, rule_filter=None, full=False, rules_file=DEFAULT_RULES_F
     print(f"  \033[0;36m{sep_h}\033[0m")
 
     # Статистика по каждому правилу
-    if not stats_by_rule:
-        print("\n  Нет данных. Трафик ещё не проходил через шейпер.")
-        print("  Убедись, что пользователи подключены и используют настроенные порты.")
-        return
-
-    for rule_id in sorted(stats_by_rule.keys()):
+    for rule_id_str in sorted(rules_saved.keys(), key=lambda x: int(x)):
+        rule_id = int(rule_id_str)
         if rule_filter is not None and rule_id != rule_filter:
             continue
-        rule_info = rules_saved.get(str(rule_id), {})
+            
+        rule_info = rules_saved.get(rule_id_str, {})
         mode      = rule_info.get('mode', 0)
         d_mbs     = rule_info.get('down_mbs', 0)
         pen_mbs   = rule_info.get('pen_mbs', 0.1)
         ports_d   = ", ".join(str(p) for p in rule_info.get('ports', [])) or "ВСЕ"
         mode_str  = get_mode_str(mode)
 
-        ips_data  = stats_by_rule[rule_id]
+        ips_data  = stats_by_rule.get(rule_id, {})
+        if not ips_data:
+            print(f"\n  \033[1;37mПравило #{rule_id}\033[0m"
+                  f"  [{mode_str} | порты: {ports_d}]  — Нет трафика:")
+            print(f"  {sep}")
+            print("  Трафик через данное правило ещё не проходил.")
+            print(f"  {sep}")
+            continue
+
         all_sorted = sorted(ips_data.keys(),
                             key=lambda x: ips_data[x]['down'] + ips_data[x]['up'],
                             reverse=True)

@@ -155,6 +155,13 @@ static __always_inline int process_packet(
 
     if (s32 > 0) rule_id_p = bpf_map_lookup_elem(&port_rule_map, &s32);
     if (!rule_id_p && d32 > 0) rule_id_p = bpf_map_lookup_elem(&port_rule_map, &d32);
+    
+    /* Fallback для правила "ВСЕ ПОРТЫ" (порт 0) */
+    if (!rule_id_p) {
+        __u32 zero = 0;
+        rule_id_p = bpf_map_lookup_elem(&port_rule_map, &zero);
+    }
+    
     if (!rule_id_p) return TC_ACT_OK;   /* port not in any rule → pass */
 
     __u32 rule_id = *rule_id_p;
