@@ -158,11 +158,14 @@ _tl_get_shaper_rule_info_for_port() {
     [ ! -f "$rules_file" ] && return 1
 
     # Ищем правило, где в списке портов (через запятую) есть наш порт
-    # Или если есть порт 0 (все порты)
+    # Используем map(gsub(" "; "")) для очистки пробелов в JSON
     local rule_data
     rule_data=$(jq -r --arg p "$target_port" '
         to_entries[] | 
-        select(.value.ports == "0" or (.value.ports | split(",") | contains([$p]))) | 
+        select(
+            (.value.ports | tostring) == "0" or 
+            (.value.ports | tostring | split(",") | map(gsub(" "; "")) | contains([$p]))
+        ) | 
         "\(.key)|\(.value.mode)|\(.value.down)|\(.value.up)"
     ' "$rules_file" 2>/dev/null | head -n1)
 
