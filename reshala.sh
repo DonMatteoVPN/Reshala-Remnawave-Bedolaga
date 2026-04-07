@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.995 - РЕФАКТОРИНГ МЕНЮ        == #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.996 - РЕФАКТОРИНГ МЕНЮ        == #
 # ============================================================ #
 #
 # Точка входа. Этот скрипт — прораб. Он только отдаёт команды
@@ -22,7 +22,7 @@ while [ -h "$SOURCE" ]; do
 done
 export SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 
-readonly VERSION="v2.995"
+readonly VERSION="v2.996"
 
 # ============================================================ #
 #              ПОДГОТОВКА И ЗАГРУЗКА КОМПОНЕНТОВ               #
@@ -151,18 +151,21 @@ show_main_menu() {
                     if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
                         if [[ -n "${LATEST_COMMIT_MESSAGE:-}" ]]; then
                             clear
-                            echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-                            echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}⚡ ЧТО НОВОГО В ЭТОМ ОБНОВЛЕНИИ?${C_RESET}                       ${C_CYAN}║${C_RESET}"
-                            echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════════╣${C_RESET}"
+                            local width=68
+                            local line_top=$(printf "%.0s═" $(seq 1 $width))
+                            local line_mid=$(printf "%.0s─" $(seq 1 $width))
                             
-                            # Форматируем текст: переносим по словам (fold -s), 
-                            # ширина 60 символов, и красиво дополняем правый край ║
-                            echo "$LATEST_COMMIT_MESSAGE" | fold -s -w 60 | while read -r line; do
-                                # Добиваем пробелами до 60 символов для ровного правого края
-                                printf "  ${C_CYAN}║${C_RESET}  %-60s ${C_CYAN}║${C_RESET}\n" "$line"
+                            echo -e "  ${C_CYAN}${line_top}${C_RESET}"
+                            echo -e "  ${C_YELLOW}⚡ ЧТО НОВОГО В ЭТОМ ОБНОВЛЕНИИ?${C_RESET} (${LATEST_VERSION})"
+                            echo -e "  ${C_CYAN}${line_mid}${C_RESET}"
+                            echo
+                            # Динамический перенос слов строго в ширину линеек
+                            echo "$LATEST_COMMIT_MESSAGE" | fold -s -w "$width" | while read -r line; do
+                                [[ -z "${line// /}" ]] && continue
+                                echo -e "  ${C_WHITE}${line}${C_RESET}"
                             done
-                            
-                            echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+                            echo
+                            echo -e "  ${C_CYAN}${line_top}${C_RESET}"
                             echo
                             echo -e "  👇 Нажми ${C_BOLD}[Enter]${C_RESET}, чтобы подтвердить и начать обновление..."
                             read -r _
