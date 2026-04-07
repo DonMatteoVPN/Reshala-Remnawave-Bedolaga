@@ -511,9 +511,23 @@ _tl_apply_limit_ebpf_wizard() {
         cat <<EOF > "${TL_CONFIG_DIR}/ebpf_config.conf"
 IFACE="${iface}"
 EOF
-        _tl_generate_ebpf_service_file > "${TL_SERVICE_PATH}"
-        systemctl daemon-reload && systemctl enable "${TL_SERVICE_NAME}"
-        if ! systemctl restart "${TL_SERVICE_NAME}"; then
+        # Снимаем маскировку, если сервис был заблокирован системой
+        systemctl unmask "${TL_SERVICE_NAME}" &>/dev/null || true
+        
+        # Генерируем конфиг во временную переменную, чтобы не создать битый файл при ошибке
+        local service_content; 
+        if ! service_content=$(_tl_generate_ebpf_service_file); then
+            err "Ошибка генерации сервис-файла. Проверь логи выше."
+            return 1
+        fi
+        
+        # Только если генерация успешна — пишем на диск
+        echo "$service_content" > "${TL_SERVICE_PATH}"
+        
+        systemctl daemon-reload
+        systemctl enable "${TL_SERVICE_NAME}"
+        _tl_restart_ebpf_engine
+        if ! systemctl is-active --quiet "${TL_SERVICE_NAME}"; then
             err "Ошибка запуска движка!"; return
         fi
         ok "Движок запущен!"
@@ -551,12 +565,18 @@ _tl_generate_ebpf_service_file() {
                  "/usr/sbin/bpftool" "/usr/bin/bpftool" "/sbin/bpftool"; do
             [[ -x "$p" ]] && { bpftool_path="$p"; break; }
         done
-        [[ -z "$bpftool_path" ]] && bpftool_path=$(find /usr/lib/linux-tools/ -name bpftool -type f -executable 2>/dev/null | head -n 1)
+        
+        # Глубокий поиск по всей системе (последний шанс)
+        if [[ -z "$bpftool_path" ]]; then
+            info "Запускаю глубокий поиск bpftool (может занять время)..." >&2
+            bpftool_path=$(find /usr -name bpftool -type f -executable 2>/dev/null | head -n 1)
+        fi
     fi
 
     # 2. Если критический бинарник не найден — выходим с ошибкой в STDERR
     if [[ -z "$bpftool_path" ]]; then
         echo -e "${C_RED}[✗] ОШИБКА: bpftool не найден!${C_RESET}" >&2
+        echo -e "  Попробуй: apt update && apt install -y linux-tools-common linux-tools-$(uname -r)" >&2
         return 1
     fi
 
@@ -660,6 +680,12 @@ _tl_show_status() {
 
 _tl_restart_ebpf_engine() {
     info "Перезагрузка..."; _tl_compile_bpf || return
+    
+    # Принудительно загружаем модули ядра
+    modprobe cls_bpf 2>/dev/null || true
+    modprobe sch_fq 2>/dev/null || true
+    
+    systemctl unmask "${TL_SERVICE_NAME}" &>/dev/null || true
     systemctl restart "${TL_SERVICE_NAME}" && ok "Перезапущено."
 }
 
