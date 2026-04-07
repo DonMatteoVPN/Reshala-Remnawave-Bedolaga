@@ -117,8 +117,8 @@ _tl_ensure_ebpf_deps() {
         info "Устанавливаю bpftool..."
         if [[ -f /etc/debian_version ]]; then
             apt-get update
-            # Ubuntu часто требует linux-tools-generic для работы bpftool
-            apt-get install -y bpftool linux-tools-common linux-tools-generic "linux-tools-$(uname -r)" || true
+            # Ubuntu часто требует linux-tools-generic или linux-tools-virtual для работы bpftool
+            apt-get install -y bpftool linux-tools-common linux-tools-generic linux-tools-virtual linux-cloud-tools-virtual "linux-tools-$(uname -r)" || true
         else
             ensure_dependencies "bpftool"
         fi
@@ -562,22 +562,31 @@ _tl_generate_ebpf_service_file() {
         for p in "/usr/lib/linux-tools/$(uname -r)/bpftool" \
                  "/usr/lib/linux-tools-$(uname -r)/bpftool" \
                  "/usr/lib/linux-tools-generic/bpftool" \
-                 "/usr/sbin/bpftool" "/usr/bin/bpftool" "/sbin/bpftool"; do
+                 "/usr/sbin/bpftool" "/usr/bin/bpftool" "/sbin/bpftool" \
+                 "/usr/local/bin/bpftool"; do
             [[ -x "$p" ]] && { bpftool_path="$p"; break; }
         done
         
-        # Глубокий поиск по всей системе (последний шанс)
+        # Глубокий поиск по всей системе (последний шанс, расширенная область)
         if [[ -z "$bpftool_path" ]]; then
-            info "Запускаю глубокий поиск bpftool (может занять время)..." >&2
-            bpftool_path=$(find /usr -name bpftool -type f -executable 2>/dev/null | head -n 1)
+            info "Запускаю тотальный поиск bpftool по всему диску..." >&2
+            bpftool_path=$(find /usr /lib /sbin /bin -name bpftool -type f -executable 2>/dev/null | head -n 1)
         fi
     fi
 
-    # 2. Если критический бинарник не найден — выходим с ошибкой в STDERR
+    # 2. Если критический бинарник не найден — выходим с диагностикой в STDERR
     if [[ -z "$bpftool_path" ]]; then
-        echo -e "${C_RED}[✗] ОШИБКА: bpftool не найден!${C_RESET}" >&2
-        echo -e "  Попробуй: apt update && apt install -y linux-tools-common linux-tools-$(uname -r)" >&2
+        echo -e "${C_RED}[✗] ОШИБКА: bpftool не найден ни в стандартных путях, ни через поиск!${C_RESET}" >&2
+        echo -e "${C_YELLOW}Диагностика репозитория:${C_RESET}" >&2
+        apt-cache search bpftool | grep bpftool >&2
+        echo -e "\n${C_CYAN}Рекомендация:${C_RESET} Попробуй вручную: apt update && apt install linux-tools-common && apt install linux-tools-\$(uname -r)" >&2
         return 1
+    fi
+
+    # 3. Для стабильности создаем симлинк, если найден не в стандартном месте
+    if [[ "$bpftool_path" != "/usr/sbin/bpftool" && "$bpftool_path" != "/usr/bin/bpftool" ]]; then
+        ln -sf "$bpftool_path" /usr/local/bin/bpftool 2>/dev/null || true
+        bpftool_path="/usr/local/bin/bpftool"
     fi
 
     local tc_path;     tc_path=$(which tc 2>/dev/null || echo "/sbin/tc")
