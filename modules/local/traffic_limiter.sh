@@ -166,7 +166,7 @@ _tl_get_shaper_rule_info_for_port() {
             (.value.ports | tostring) == "0" or 
             (.value.ports | tostring | split(",") | map(gsub(" "; "")) | contains([$p]))
         ) | 
-        "\(.key)|\(.value.mode)|\(.value.down)|\(.value.up)"
+        "\(.key)|\(.value.mode)|\(.value.down_mbs)|\(.value.up_mbs)"
     ' "$rules_file" 2>/dev/null | head -n1)
 
     if [[ -n "$rule_data" ]]; then
