@@ -152,32 +152,85 @@ _tl_cleanup_old_system() {
     ok "Очистка завершена."
 }
 
+_tl_get_shaper_rule_info_for_port() {
+    local target_port="$1"
+    local rules_file="${TL_CONFIG_DIR}/rules.json"
+    [ ! -f "$rules_file" ] && return 1
+
+    # Ищем правило, где в списке портов (через запятую) есть наш порт
+    # Или если есть порт 0 (все порты)
+    local rule_data
+    rule_data=$(jq -r --arg p "$target_port" '
+        to_entries[] | 
+        select(.value.ports == "0" or (.value.ports | split(",") | contains([$p]))) | 
+        "\(.key)|\(.value.mode)|\(.value.down)|\(.value.up)"
+    ' "$rules_file" 2>/dev/null | head -n1)
+
+    if [[ -n "$rule_data" ]]; then
+        local rid; rid=$(echo "$rule_data" | cut -d'|' -f1)
+        local mode; mode=$(echo "$rule_data" | cut -d'|' -f2)
+        local down; down=$(echo "$rule_data" | cut -d'|' -f3)
+        local up; up=$(echo "$rule_data" | cut -d'|' -f4)
+        
+        local mode_text="Статика"
+        [[ "$mode" == "2" ]] && mode_text="Динамика"
+        [[ "$mode" == "3" ]] && mode_text="Общее"
+        
+        echo -e " ${C_GREEN}[✓ Правило #$rid | $mode_text | $down/$up МБ/с]${C_RESET}"
+        return 0
+    fi
+    return 1
+}
+
 _tl_show_listening_ports_smart() {
     echo -e "  ${C_CYAN}[i] Подсказка: Эта таблица показывает запущенные на сервере сервисы.${C_RESET}"
     echo -e "  ${C_GRAY}    • Если вы видите${C_RESET} xray ${C_GRAY}или${C_RESET} v2ray ${C_GRAY}— это порт вашего VPN, его нужно шейпить.${C_RESET}"
-    echo -e "  ${C_GRAY}    • Если вы видите${C_RESET} sshd ${C_GRAY}— это порт консоли сервера. Лучше его не трогать,${C_RESET}"
-    echo -e "  ${C_GRAY}      иначе при скачивании у вас начнёт лагать терминал!${C_RESET}"
-    echo -e "  ${C_CYAN}Активные порты прямо сейчас:${C_RESET}"
+    echo -e "  ${C_GRAY}    • Если вы видите${C_RESET} sshd ${C_GRAY}— это порт консоли сервера. Лучше его не трогать.${C_RESET}"
+    echo
+
+    # 1. Проверяем UFW
+    if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+        echo -e "  ${C_GREEN}[✓] UFW активен.${C_RESET}"
+        local ufw_out; ufw_out=$(ufw status verbose)
+        local in_policy; in_policy=$(echo "$ufw_out" | grep "Default:" | awk '{print $2}')
+        local out_policy; out_policy=$(echo "$ufw_out" | grep "Default:" | awk '{print $4}' | tr -d ',')
+        
+        echo -e "  ${C_CYAN}[i] Политика по умолчанию:${C_RESET}"
+        local in_text="Разрешены"; [[ "$in_policy" == "deny" ]] && in_text="Блокируются (рекомендуется)"
+        local out_text="Разрешены (стандарт)"; [[ "$out_policy" == "deny" ]] && out_text="Блокируются"
+        echo -e "          ${C_GRAY}↳   Входящие: $in_text${C_RESET}"
+        echo -e "          ${C_GRAY}↳   Исходящие: $out_text${C_RESET}"
+        
+        echo -e "  ${C_CYAN}[i] Активные правила:${C_RESET}"
+        # Парсим правила UFW (берем только ALLOW)
+        ufw status | grep "ALLOW" | grep -v "(v6)" | while read -r line; do
+            local port_raw; port_raw=$(echo "$line" | awk '{print $1}')
+            local port; port=$(echo "$port_raw" | cut -d'/' -f1)
+            # Пропускаем, если не число
+            [[ ! "$port" =~ ^[0-9]+$ ]] && continue
+            
+            local comment; comment=$(echo "$line" | grep -o '#.*' | sed 's/# //')
+            [ -z "$comment" ] && comment="Открыт для всех"
+            
+            local rule_info; rule_info=$(_tl_get_shaper_rule_info_for_port "$port")
+            echo -e "          ${C_GRAY}↳   ${C_YELLOW}● Порт $port${C_RESET} ($comment)$rule_info"
+        done
+        echo
+    fi
+
+    echo -e "  ${C_CYAN}Активные процессы (слушают порты):${C_RESET}"
     echo "  ------------------------------------------------------------"
-    
     # Надежный парсинг вывода ss -tulnp
     ss -tulnp | grep LISTEN | while read -r line; do
-        # Берем IP:Port (5-я колонка) и инфу о процессе (последняя колонка)
         local_add_port=$(echo "$line" | awk '{print $5}')
         proc_info=$(echo "$line" | awk '{print $NF}')
-        
-        # Порт — всё что после последнего двоеточия
         port="${local_add_port##*:}"
-        
-        # Название процесса — вытаскиваем между первыми кавычками "имя"
         proc_name=$(echo "$proc_info" | grep -o '("[^"]*"' | head -n1 | tr -d '"(')
-        
-        # Защита от пустых имен
         [ -z "$proc_name" ] && proc_name="Системный/Неизвестен"
         
-        echo -e "    • Порт: ${C_YELLOW}${port}${C_RESET}  —>  слушает ${C_GREEN}${proc_name}${C_RESET}"
+        local rule_info; rule_info=$(_tl_get_shaper_rule_info_for_port "$port")
+        echo -e "    • Порт: ${C_YELLOW}${port}${C_RESET}  —>  слушает ${C_GREEN}${proc_name}${C_RESET}$rule_info"
     done | sort -u -t: -k2 -n
-    
     echo "  ------------------------------------------------------------"
 }
 
