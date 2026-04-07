@@ -43,10 +43,30 @@ readonly TL_BPF_PIN_DIR="/sys/fs/bpf/reshala"
 # ============================================================ #
 
 show_traffic_limiter_menu() {
-    local kernel_ver; kernel_ver=$(uname -r | cut -d. -f1,2)
-    if (( $(echo "$kernel_ver < 5.4" | bc -l) )); then
+    local k_major; k_major=$(uname -r | cut -d. -f1)
+    local k_minor; k_minor=$(uname -r | cut -d. -f2)
+    local kernel_ver=$(uname -r | cut -d- -f1)
+
+    # Правильное сравнение версий: (Major < 5) ИЛИ (Major == 5 И Minor < 4)
+    if [[ "$k_major" -lt 5 ]] || [[ "$k_major" -eq 5 && "$k_minor" -lt 4 ]]; then
         clear; menu_header "🚦 Шейпер трафика (eBPF)"
         printf_critical_warning "ОШИБКА: Твое ядро ($kernel_ver) слишком старое для eBPF шейпера (нужно 5.4+)."
+        echo
+        echo -e "  ${C_CYAN}══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_YELLOW}📋 ТЕХНИЧЕСКИЙ ОТЧЕТ ДЛЯ ПОДДЕРЖКИ:${C_RESET}"
+        echo -e "  ${C_CYAN}──────────────────────────────────────────────────────────────${C_RESET}"
+        echo -e "  1. Ядро:         $(uname -a)"
+        echo -e "  2. Дистрибутив:  $(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2)"
+        echo -e "  3. Статус BTF:   $(ls -l /sys/kernel/btf/vmlinux 2>/dev/null | awk '{print $1, $9}' || echo 'не найден')"
+        echo -e "  4. Конфиг BPF:   $((zgrep CONFIG_BPF /proc/config.gz 2>/dev/null || grep CONFIG_BPF /boot/config-$(uname -r) 2>/dev/null) | grep -E 'CONFIG_BPF_SYSCALL|CONFIG_NET_CLS_BPF' | xargs echo || echo 'недоступен')"
+        echo -e "  5. Сетевой стек: $(ip -br link | head -n 3 | xargs echo)..."
+        echo -e "  ${C_CYAN}══════════════════════════════════════════════════════════════${C_RESET}"
+        echo
+        echo -e "  ${C_GREEN}💡 ЧТО ДЕЛАТЬ?${C_RESET}"
+        echo -e "  • Твоему серверу нужно обновить ядро до актуальной версии."
+        echo -e "  • На Ubuntu/Debian: ${C_WHITE}apt update && apt upgrade -y && reboot${C_RESET}"
+        echo -e "  • После перезагрузки ядро должно стать 5.15 или выше."
+        echo
         wait_for_enter; return
     fi
 
