@@ -40,6 +40,9 @@ readonly TL_SERVICE_PATH="/etc/systemd/system/${TL_SERVICE_NAME}"
 readonly TL_OLD_APPLY_SCRIPT="/usr/local/bin/reshala-traffic-limiter-apply.sh"
 readonly TL_BPF_PIN_DIR="/sys/fs/bpf/reshala"
 
+# Глобальные переменные
+IFACE=""
+
 # ============================================================ #
 # ==                      ГЛАВНОЕ МЕНЮ                      == #
 # ============================================================ #
@@ -379,6 +382,44 @@ _tl_delete_rule_wizard() {
     fi
 }
 
+_tl_ensure_engine_ready() {
+    # 1. Проверяем, запущен ли сервис и есть ли карты
+    if ! systemctl is-active --quiet "${TL_SERVICE_NAME}" || [ ! -d "${TL_BPF_PIN_DIR}/maps" ]; then
+        echo -e "\n  ${C_RED}╔════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_RED}║ 🔥 ОБНАРУЖЕН СТАРЫЙ ДВИЖОК ИЛИ СБОЙ ИНИЦИАЛИЗАЦИИ!       ║${C_RESET}"
+        echo -e "  ${C_RED}╠════════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_WHITE}║ Старые правила шейпинга будут удалены.                     ║${C_RESET}"
+        echo -e "  ${C_WHITE}║ Выполняю миграцию на новый eBPF движок...                  ║${C_RESET}"
+        echo -e "  ${C_RED}╚════════════════════════════════════════════════════════════╝${C_RESET}\n"
+        
+        sleep 2
+        
+        # 2. Очистка старья
+        _tl_cleanup_old_system
+        
+        # 3. Подготовка и запуск
+        _tl_ensure_ebpf_deps || return 1
+        _tl_compile_bpf || return 1
+        
+        _tl_generate_ebpf_service_file > "${TL_SERVICE_PATH}"
+        systemctl daemon-reload
+        systemctl enable --now "${TL_SERVICE_NAME}"
+        
+        # Ожидание инициализации карт
+        local timeout=10
+        while [ ! -d "${TL_BPF_PIN_DIR}/maps" ] && [ $timeout -gt 0 ]; do
+            sleep 1; ((timeout--))
+        done
+
+        if [ ! -d "${TL_BPF_PIN_DIR}/maps" ]; then
+             err "❌ Ошибка: eBPF движок не запустился. Проверь 'journalctl -u ${TL_SERVICE_NAME}'"
+             return 1
+        fi
+        ok "Миграция завершена! Новый движок активен."
+    fi
+    return 0
+}
+
 _tl_apply_limit_ebpf_wizard() {
     _tl_ensure_ebpf_deps || return
     clear; menu_header "eBPF Шейпер — Информация"
@@ -397,6 +438,18 @@ _tl_apply_limit_ebpf_wizard() {
     echo -e "  ${C_CYAN}ID 0..31. Новое правило — свободный номер.${C_RESET}"
     echo -e "  ${C_CYAN}Изменить существующее — введи его ID.${C_RESET}"
     local rule_id; rule_id=$(ask_number_in_range "Номер правила (rule_id)" 0 31 0) || return
+
+    # Подгружаем интерфейс из конфига
+    if [ -f "${TL_CONFIG_DIR}/ebpf_config.conf" ]; then
+        # shellcheck source=/dev/null
+        source "${TL_CONFIG_DIR}/ebpf_config.conf"
+    fi
+    
+    # Авто-детект интерфейса, если он пуст
+    if [[ -z "$IFACE" ]]; then
+        IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+        [[ -z "$IFACE" ]] && IFACE=$(ip -br link | grep -v "lo" | awk '{print $1}' | head -n1)
+    fi
 
     # ── Шаг 1: интерфейс (только если движок ещё не запущен) ──
     local is_active="false"
@@ -519,32 +572,52 @@ _tl_apply_limit_ebpf_wizard() {
     echo
     if ! ask_yes_no "Применить?"; then return; fi
 
-
-    # ── Применяем ──
-    if [[ "$is_active" == "false" ]]; then
-        # Первый запуск — полная установка движка
+    # ── ПРОВЕРКА И ИНИЦИАЛИЗАЦИЯ ДВИЖКА (АВТОНОМНО) ──
+    if ! systemctl is-active --quiet "${TL_SERVICE_NAME}" || [ ! -d "${TL_BPF_PIN_DIR}/maps" ]; then
+        echo -e "\n  ${C_RED}╔════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_RED}║ 🔥 ВНИМАНИЕ: МИГРАЦИЯ НА НОВЫЙ eBPF ДВИЖОК               ║${C_RESET}"
+        echo -e "  ${C_RED}╠════════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_WHITE}║ Старые правила (U32/Legacy) будут полностью удалены.       ║${C_RESET}"
+        echo -e "  ${C_WHITE}║ Настройки переносятся в новый формат.                      ║${C_RESET}"
+        echo -e "  ${C_RED}╚════════════════════════════════════════════════════════════╝${C_RESET}\n"
+        
+        sleep 2
+        
+        # Полная зачистка старого шейпера
         _tl_cleanup_old_system
+        
+        # Компиляция и подготовка
         _tl_compile_bpf || return
         mkdir -p "${TL_CONFIG_DIR}"
+        
+        # Сохранение конфига интерфейса
         cat <<EOF > "${TL_CONFIG_DIR}/ebpf_config.conf"
 IFACE="${iface}"
 EOF
         # Снимаем маскировку, если сервис был заблокирован системой
         systemctl unmask "${TL_SERVICE_NAME}" &>/dev/null || true
         
-        # Генерируем конфиг во временную переменную, чтобы не создать битый файл при ошибке
-        local service_content; 
-        if ! service_content=$(_tl_generate_ebpf_service_file); then
-            err "Ошибка генерации сервис-файла. Проверь логи выше."
-            return 1
-        fi
-        
-        # Только если генерация успешна — пишем на диск
-        echo "$service_content" > "${TL_SERVICE_PATH}"
+        # Генерация и установка сервиса
+        _tl_generate_ebpf_service_file > "${TL_SERVICE_PATH}"
         
         systemctl daemon-reload
         systemctl enable "${TL_SERVICE_NAME}"
-        _tl_restart_ebpf_engine
+        
+        info "Запуск eBPF движка..."
+        systemctl restart "${TL_SERVICE_NAME}"
+        
+        # Ожидание инициализации (проверка появления карт)
+        local timeout=10
+        while [ ! -d "${TL_BPF_PIN_DIR}/maps" ] && [ $timeout -gt 0 ]; do
+            sleep 1; ((timeout--))
+        done
+
+        if [ ! -d "${TL_BPF_PIN_DIR}/maps" ]; then
+             err "❌ Критическая ошибка: Движок не запустился. Проверь логи: journalctl -u ${TL_SERVICE_NAME}"
+             return 1
+        fi
+        ok "Движок успешно развернут!"
+    fi
         if ! systemctl is-active --quiet "${TL_SERVICE_NAME}"; then
             err "Ошибка запуска движка!"; return
         fi
