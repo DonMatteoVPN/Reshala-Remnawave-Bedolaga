@@ -98,8 +98,8 @@ _printf_link() {
     local text="$1"
     local url="$2"
     local color="${3:-$C_CYAN}"
-    # ANSI escape sequence for hyperlinks
-    printf "%b\033]8;;%s\033\\%s\033]8;;\033\\%b\n" "$color" "$url" "$text" "$C_RESET"
+    # Выводим [Текст] и рядом саму ссылку явно, чтобы уж точно работало
+    printf "%b%s%b %b(%s)%b\n" "$color" "$text" "$C_RESET" "$C_GRAY" "$url" "$C_RESET"
 }
 
 # Страница поддержки разработчика
@@ -157,12 +157,12 @@ show_support_page() {
 
     if [[ "$SHOW_PLATEGA" == "1" ]]; then
         echo -e "  ${C_GREEN}💳 Platega (Bank Card):${C_RESET}"
-        _printf_link "     🚀 Перейти к оплате через Platega" "${DON_PLATEGA_URL}" "${C_CYAN}"; echo
+        _printf_link "     🚀 Донейт через Platega" "${DON_PLATEGA_URL}" "${C_CYAN}"; echo
     fi
 
     if [[ "$SHOW_TRIBUT" == "1" ]]; then
         echo -e "  ${C_GREEN}📱 Донат через Tribut (Telegram):${C_RESET}"
-        _printf_link "     💎 Поддержать через Tribut" "${DON_TRIBUT_URL}" "${C_CYAN}"; echo
+        _printf_link "     💎 Кнопка доната Tribut" "${DON_TRIBUT_URL}" "${C_CYAN}"; echo
     fi
 
     if [[ "$SHOW_GROUP" == "1" || "$SHOW_SITE" == "1" ]]; then
@@ -215,8 +215,8 @@ show_main_menu() {
             printf_menu_option "q" "🚪 Выйти из решалы" "${C_CYAN}"
         fi
 
-        # Кнопка поддержки (Яркая и заметная)
-        printf_menu_option "s" " ПОДДЕРЖИ РАЗРАБОТЧИКА " "${C_BOLD}${C_YELLOW}\033[41m"
+        # Кнопка поддержки (Стильно и заметно)
+        printf_menu_option "s" " 🌟 ПОДДЕРЖИ РАЗРАБОТЧИКА 🌟" "${C_BOLD}${C_YELLOW}"
 
         print_separator "-" 60
 
