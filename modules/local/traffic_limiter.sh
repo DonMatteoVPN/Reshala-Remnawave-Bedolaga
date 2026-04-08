@@ -630,8 +630,9 @@ ExecStartPre=-${rm_path} -rf ${TL_BPF_PIN_DIR}
 ExecStartPre=${mkdir_path} -p ${PIN_PROGS} ${PIN_MAPS}
 
 # === ЗАГРУЗКА И ДИАГНОСТИКА ===
-# Используем --debug для детальных логов в journalctl
-ExecStartPre=${bpftool_path} --debug prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} pinmaps ${PIN_MAPS}
+# Используем --debug для детальных логов, и явно задаем type classifier для игнорирования имен секций
+# Добавляем --legacy на случай очень строгих версий bpftool
+ExecStartPre=${bpftool_path} --debug --legacy prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} type classifier pinmaps ${PIN_MAPS}
 # Выводим список созданных файлов для отладки
 ExecStartPre=-${ls_path} -l ${PIN_PROGS}
 
