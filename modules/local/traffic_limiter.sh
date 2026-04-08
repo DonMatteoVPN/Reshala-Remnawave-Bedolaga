@@ -111,29 +111,36 @@ show_traffic_limiter_menu() {
 
 _tl_ensure_ebpf_deps() {
     info "Проверка зависимостей для eBPF..."
-    ensure_dependencies "clang" "llvm" "libbpf-dev" "python3" "bc" "kmod"
+    # Добавляем bpftool в основной список
+    ensure_dependencies "clang" "llvm" "libbpf-dev" "python3" "bc" "kmod" "bpftool"
     
+    # Дополнительная проверка на случай, если bpftool не в PATH или в linux-tools
     if ! which bpftool &>/dev/null; then
-        info "Авто-Хирург: Пытаюсь установить bpftool..."
+        info "Авто-Хирург: Ищу bpftool в специфичных путях..."
         if [[ -f /etc/debian_version ]]; then
+            # Пытаемся поставить пакет bpftool (для новых ядер) или linux-tools (для старых)
             apt-get update
-            apt-get install -y -f || true # Починить зависимости
-            apt-get install -y bpftool linux-tools-common linux-tools-generic linux-tools-virtual linux-cloud-tools-virtual "linux-tools-$(uname -r)" || true
-        else
-            ensure_dependencies "bpftool"
+            apt-get install -y bpftool || apt-get install -y linux-tools-common linux-tools-generic "linux-tools-$(uname -r)" || true
         fi
         
-        # Сразу проверяем еще раз
-        if ! which bpftool &>/dev/null; then
-             # Попытка найти во всех возможных папках
-             local p
-             for p in "/usr/lib/linux-tools/$(uname -r)/bpftool" "/usr/lib/linux-tools-$(uname -r)/bpftool" "/usr/lib/linux-tools-generic/bpftool"; do
-                 if [[ -x "$p" ]]; then
-                     ln -sf "$p" /usr/local/bin/bpftool 2>/dev/null || true
-                     break
-                 fi
-             done
-        fi
+        # Поиск по известным путям linux-tools
+        local p
+        local k_ver; k_ver=$(uname -r)
+        local possible_bins=(
+            "/usr/lib/linux-tools/${k_ver}/bpftool"
+            "/usr/lib/linux-tools-$(echo ${k_ver} | cut -d'-' -f1-2)/bpftool"
+            "/usr/lib/linux-tools-generic/bpftool"
+            "/usr/local/sbin/bpftool"
+            "/usr/sbin/bpftool"
+        )
+        
+        for p in "${possible_bins[@]}"; do
+            if [[ -x "$p" ]]; then
+                info "Нашел bpftool: $p. Создаю симлинк..."
+                ln -sf "$p" /usr/local/bin/bpftool 2>/dev/null || true
+                break
+            fi
+        done
     fi
 
     local kheaders="linux-headers-$(uname -r)"
@@ -142,10 +149,7 @@ _tl_ensure_ebpf_deps() {
     if ! dpkg -s "$kheaders" &>/dev/null && ! dpkg -s "$kheaders_meta" &>/dev/null; then
         info "Устанавливаю заголовки ядра $kheaders..."
         apt-get update
-        if ! apt-get install -y "$kheaders"; then
-            warn "Заголовки для $(uname -r) не найдены. Ставлю метапакет ${kheaders_meta}..."
-            apt-get install -y "$kheaders_meta"
-        fi
+        apt-get install -y "$kheaders" || apt-get install -y "$kheaders_meta" || true
     fi
     sysctl -w kernel.unprivileged_bpf_disabled=0 &>/dev/null || true
 }
@@ -567,43 +571,48 @@ _tl_generate_ebpf_service_file() {
     local PIN_PROGS="${TL_BPF_PIN_DIR}/progs"
     local PIN_MAPS="${TL_BPF_PIN_DIR}/maps"
 
-    # 1. Сначала находим все пути (БЕЗ вывода в stdout)
+    # 1. Поиск bpftool
     local bpftool_path; bpftool_path=$(which bpftool 2>/dev/null)
+    
     if [[ -z "$bpftool_path" ]]; then
-        local p
-        for p in "/usr/lib/linux-tools/$(uname -r)/bpftool" \
-                 "/usr/lib/linux-tools-$(uname -r)/bpftool" \
-                 "/usr/lib/linux-tools-generic/bpftool" \
-                 "/usr/sbin/bpftool" "/usr/bin/bpftool" "/sbin/bpftool" \
-                 "/usr/local/bin/bpftool"; do
+        local k_ver; k_ver=$(uname -r)
+        local possible_paths=(
+            "/usr/local/bin/bpftool"
+            "/usr/local/sbin/bpftool"
+            "/usr/sbin/bpftool"
+            "/usr/bin/bpftool"
+            "/usr/lib/linux-tools/${k_ver}/bpftool"
+            "/usr/lib/linux-tools-$(echo ${k_ver} | cut -d'-' -f1-2)/bpftool"
+            "/usr/lib/linux-tools-generic/bpftool"
+        )
+        for p in "${possible_paths[@]}"; do
             [[ -x "$p" ]] && { bpftool_path="$p"; break; }
         done
         
-        # Глубокий поиск по всей системе (последний шанс, расширенная область)
+        # Если всё ещё нет — ищем find-ом (медленно, но надёжно)
         if [[ -z "$bpftool_path" ]]; then
             info "Запускаю тотальный поиск bpftool по всему диску..." >&2
-            bpftool_path=$(find /usr /lib /sbin /bin -name bpftool -type f -executable 2>/dev/null | head -n 1)
+            bpftool_path=$(find /usr/sbin /usr/bin /sbin /bin /usr/lib -name bpftool -type f -executable 2>/dev/null | head -n 1)
         fi
     fi
 
     # 2. Если критический бинарник не найден — выходим с ЯДЕРНЫМ ПРЕДУПРЕЖДЕНИЕМ
     if [[ -z "$bpftool_path" ]]; then
-        cat <<EOF >&2
-${C_RED}╔════════════════════════════════════════════════════════════╗${C_RESET}
-${C_RED}║ 🔥 ЯДЕРНОЕ ПРЕДУПРЕЖДЕНИЕ: BPFTOOL НЕ НАЙДЕН!             ║${C_RESET}
-${C_RED}╠════════════════════════════════════════════════════════════╣${C_RESET}
-${C_WHITE}║ Твое ядро или репозиторий блокируют установку BPF-пакетов. ║${C_RESET}
-${C_WHITE}║ Решала пытался поставить их сам, но система отказала.      ║${C_RESET}
-${C_WHITE}║                                                            ║${C_RESET}
-${C_CYAN}║ ЧТО ТЕБЕ НУЖНО СДЕЛАТЬ СЕЙЧАС (ВРУЧНУЮ):                   ║${C_RESET}
-${C_YELLOW}║ 1. apt update                                              ║${C_RESET}
-${C_YELLOW}║ 2. apt install -y linux-tools-common                       ║${C_RESET}
-${C_YELLOW}║ 3. apt install -y linux-tools-\$(uname -r)                   ║${C_RESET}
-${C_WHITE}║                                                            ║${C_RESET}
-${C_WHITE}║ Если ошибка повторится — твой хостинг зарезал поддержку    ║${C_RESET}
-${C_WHITE}║ eBPF на уровне ядра. В этом случае шейпер не запустится.    ║${C_RESET}
-${C_RED}╚════════════════════════════════════════════════════════════╝${C_RESET}
-EOF
+        # Используем printf %b для правильной трактовки цветов из common.sh
+        printf "%b" "${C_RED}╔════════════════════════════════════════════════════════════╗${C_RESET}\n" >&2
+        printf "%b" "${C_RED}║ 🔥 ЯДЕРНОЕ ПРЕДУПРЕЖДЕНИЕ: BPFTOOL НЕ НАЙДЕН!             ║${C_RESET}\n" >&2
+        printf "%b" "${C_RED}╠════════════════════════════════════════════════════════════╣${C_RESET}\n" >&2
+        printf "%b" "${C_WHITE}║ Твое ядро или репозиторий блокируют установку BPF-пакетов. ║${C_RESET}\n" >&2
+        printf "%b" "${C_WHITE}║ Решала пытался поставить их сам, но система отказала.      ║${C_RESET}\n" >&2
+        printf "%b" "${C_WHITE}║                                                            ║${C_RESET}\n" >&2
+        printf "%b" "${C_CYAN}║ ЧТО ТЕБЕ НУЖНО СДЕЛАТЬ СЕЙЧАС (ВРУЧНУЮ):                   ║${C_RESET}\n" >&2
+        printf "%b" "${C_YELLOW}║ 1. apt update                                              ║${C_RESET}\n" >&2
+        printf "%b" "${C_YELLOW}║ 2. apt install -y linux-tools-common                       ║${C_RESET}\n" >&2
+        printf "%b" "${C_YELLOW}║ 3. apt install -y linux-tools-\$(uname -r)                   ║${C_RESET}\n" >&2
+        printf "%b" "${C_WHITE}║                                                            ║${C_RESET}\n" >&2
+        printf "%b" "${C_WHITE}║ Если ошибка повторится — твой хостинг зарезал поддержку    ║${C_RESET}\n" >&2
+        printf "%b" "${C_WHITE}║ eBPF на уровне ядра. В этом случае шейпер не запустится.    ║${C_RESET}\n" >&2
+        printf "%b" "${C_RED}╚════════════════════════════════════════════════════════════╝${C_RESET}\n" >&2
         return 1
     fi
 
