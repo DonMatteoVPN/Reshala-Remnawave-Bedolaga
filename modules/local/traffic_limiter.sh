@@ -618,11 +618,6 @@ EOF
         fi
         ok "Движок успешно развернут!"
     fi
-        if ! systemctl is-active --quiet "${TL_SERVICE_NAME}"; then
-            err "Ошибка запуска движка!"; return
-        fi
-        ok "Движок запущен!"
-    fi
 
     # Применяем правило (движок уже работает)
     info "Применяю правило #${rule_id}..."
