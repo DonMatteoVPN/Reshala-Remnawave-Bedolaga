@@ -628,35 +628,39 @@ RemainAfterExit=yes
 ExecStartPre=-${sysctl_path} -w kernel.unprivileged_bpf_disabled=0
 ExecStartPre=-${tc_path} qdisc del dev ${IFACE} root
 ExecStartPre=-${tc_path} qdisc del dev ${IFACE} clsact
+# Глубокая очистка для предотвращения "File exists"
+ExecStartPre=-/bin/bash -c "${rm_path} -rf ${TL_BPF_PIN_DIR}/*"
 ExecStartPre=-${rm_path} -rf ${TL_BPF_PIN_DIR}
 ExecStartPre=${mkdir_path} -p ${PIN_PROGS} ${PIN_MAPS}
 
 # === ЗАГРУЗКА И ДИАГНОСТИКА ===
-# Используем --debug для детальных логов, и явно задаем type classifier для игнорирования имен секций
-# Добавляем --legacy на случай очень строгих версий bpftool
-ExecStartPre=${bpftool_path} --debug --legacy prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} type classifier pinmaps ${PIN_MAPS}
+# Убрали --legacy (не везде поддерживается), оставили type classifier (универсально)
+ExecStartPre=${bpftool_path} --debug prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} type classifier pinmaps ${PIN_MAPS}
 # Выводим список созданных файлов для отладки
 ExecStartPre=-${ls_path} -l ${PIN_PROGS}
 
 # === ПОДКЛЮЧЕНИЕ ШЕЙПЕРА (С гибким поиском имен) ===
 ExecStartPre=${tc_path} qdisc add dev ${IFACE} root fq
 ExecStartPre=${tc_path} qdisc add dev ${IFACE} clsact
-# Пробуем подключить по имени секции (cls_down) или по имени функции (reshala_handle_down)
-ExecStartPre=/bin/bash -c 'if [ -f ${PIN_PROGS}/cls_down ]; then \
-    ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/cls_down; \
-    else \
-    ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/reshala_handle_down; \
+# Пробуем все варианты: по секции (down), по полной секции (classifier/down) или по функции
+ExecStartPre=/bin/bash -c '\
+    if   [ -f ${PIN_PROGS}/down ]; then ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/down; \
+    elif [ -f ${PIN_PROGS}/cls_down ]; then ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/cls_down; \
+    elif [ -f ${PIN_PROGS}/classifier/down ]; then ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/classifier/down; \
+    else ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/reshala_handle_down; \
     fi'
-ExecStartPre=/bin/bash -c 'if [ -f ${PIN_PROGS}/cls_up ]; then \
-    ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/cls_up; \
-    else \
-    ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/reshala_handle_up; \
+ExecStartPre=/bin/bash -c '\
+    if   [ -f ${PIN_PROGS}/up ]; then ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/up; \
+    elif [ -f ${PIN_PROGS}/cls_up ]; then ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/cls_up; \
+    elif [ -f ${PIN_PROGS}/classifier/up ]; then ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/classifier/up; \
+    else ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/reshala_handle_up; \
     fi'
 
 # === ВОССТАНОВЛЕНИЕ ПРАВИЛ ===
 ExecStart=${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore
 
 # === ОСТАНОВКА ===
+ExecStop=-/bin/bash -c "${rm_path} -rf ${TL_BPF_PIN_DIR}/*"
 ExecStop=${rm_path} -rf ${TL_BPF_PIN_DIR}
 ExecStop=-${tc_path} qdisc del dev ${IFACE} root
 ExecStop=-${tc_path} qdisc del dev ${IFACE} clsact
