@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.999916 - РЕФАКТОРИНГ МЕНЮ        == #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v3.0 - РЕФАКТОРИНГ МЕНЮ        == #
 # ============================================================ #
 #
 # Точка входа. Этот скрипт — прораб. Он только отдаёт команды
@@ -22,7 +22,7 @@ while [ -h "$SOURCE" ]; do
 done
 export SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 
-readonly VERSION="v2.999916"
+readonly VERSION="v3.0"
 
 # ============================================================ #
 #              ПОДГОТОВКА И ЗАГРУЗКА КОМПОНЕНТОВ               #
@@ -93,6 +93,98 @@ run_module() {
     fi
 }
 
+# Помощник для кликабельных ссылок в терминале
+_printf_link() {
+    local text="$1"
+    local url="$2"
+    local color="${3:-$C_CYAN}"
+    # ANSI escape sequence for hyperlinks
+    printf "%b\033]8;;%s\033\\%s\033]8;;\033\\%b\n" "$color" "$url" "$text" "$C_RESET"
+}
+
+# Страница поддержки разработчика
+show_support_page() {
+    # === ПАНЕЛЬ УПРАВЛЕНИЯ (1 = Показать, 0 = Скрыть) ===
+    local SHOW_USDT=1
+    local SHOW_BTC=1
+    local SHOW_TON=0
+    local SHOW_PLATEGA=0     # По умолчанию скрыто, как ты просил
+    local SHOW_TRIBUT=1      # Донат через Tribut (Telegram)
+    local SHOW_GROUP=1       # Группа ТГ Решалы
+    local SHOW_SITE=1        # Сайт Решалы
+    
+    # === НАСТРОЙКИ (Просто поменяй значения ниже) ===
+    local DON_USDT_ADDR="TKPnnmtJcDM7B2uCoLQciwZmS7f8ckMNx9" 
+    local DON_BTC_ADDR="bc1q235adg3dd4t43jmkpqka0hj305la43md38fc0n" 
+    local DON_TON_ADDR="UQ..." 
+    local DON_PLATEGA_URL="https://platega.com/secret"
+    local DON_TRIBUT_URL="https://t.me/tribute/app?startapp=dxrn"
+    
+    local LINK_GROUP_URL="https://t.me/reshala_prod"
+    local LINK_SITE_URL="https://github.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga"
+    # ========================================================
+
+    clear
+    # Логотип РЕШАЛА с градиентом
+    echo -e "  ${C_CYAN}  ██████╗ ███████╗███████╗██╗  ██╗ █████╗ ██╗      █████╗ ${C_RESET}"
+    echo -e "  ${C_CYAN}  ██╔══██╗██╔════╝██╔════╝██║  ██║██╔══██╗██║     ██╔══██╗${C_RESET}"
+    echo -e "  ${C_BLUE}  ██████╔╝█████╗  ███████╗███████║███████║██║     ███████║${C_RESET}"
+    echo -e "  ${C_BLUE}  ██╔══██╗██╔══╝  ╚════██║██╔══██║██╔══██║██║     ██╔══██║${C_RESET}"
+    echo -e "  ${C_RED}  ██║  ██║███████╗███████║██║  ██║██║  ██║███████╗██║  ██║${C_RESET}"
+    echo -e "  ${C_RED}  ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝${C_RESET}"
+    echo
+    echo -e "           ${C_BOLD}${C_WHITE}от ${C_YELLOW}DonMatteo${C_WHITE} с любовью блять!${C_RESET}"
+    echo
+    print_separator "═" 64 "${C_CYAN}"
+    echo -e "  ${C_YELLOW}🚀 ПОДДЕРЖИ ПРОЕКТ — ВДОХНОВИ НА НОВЫЕ ФИЧИ!${C_RESET}"
+    print_separator "─" 64 "${C_GRAY}"
+    echo
+
+    if [[ "$SHOW_USDT" == "1" ]]; then
+        echo -e "  ${C_GREEN}💎 USDT (TRC20):${C_RESET}"
+        echo -e "     ${C_WHITE}${DON_USDT_ADDR}${C_RESET}"; echo
+    fi
+
+    if [[ "$SHOW_BTC" == "1" ]]; then
+        echo -e "  ${C_GREEN}💰 Bitcoin (BTC):${C_RESET}"
+        echo -e "     ${C_WHITE}${DON_BTC_ADDR}${C_RESET}"; echo
+    fi
+
+    if [[ "$SHOW_TON" == "1" ]]; then
+        echo -e "  ${C_GREEN}💎 TON (Kripta):${C_RESET}"
+        echo -e "     ${C_WHITE}${DON_TON_ADDR}${C_RESET}"; echo
+    fi
+
+    if [[ "$SHOW_PLATEGA" == "1" ]]; then
+        echo -e "  ${C_GREEN}💳 Platega (Bank Card):${C_RESET}"
+        _printf_link "     🚀 Перейти к оплате через Platega" "${DON_PLATEGA_URL}" "${C_CYAN}"; echo
+    fi
+
+    if [[ "$SHOW_TRIBUT" == "1" ]]; then
+        echo -e "  ${C_GREEN}📱 Донат через Tribut (Telegram):${C_RESET}"
+        _printf_link "     💎 Поддержать через Tribut" "${DON_TRIBUT_URL}" "${C_CYAN}"; echo
+    fi
+
+    if [[ "$SHOW_GROUP" == "1" || "$SHOW_SITE" == "1" ]]; then
+        print_separator "─" 64 "${C_GRAY}"
+        echo -e "  ${C_YELLOW}🔗 ПОЛЕЗНЫЕ ССЫЛКИ:${C_RESET}"; echo
+        
+        if [[ "$SHOW_GROUP" == "1" ]]; then
+            echo -e "  ${C_GREEN}🚀 Группа ТГ Решалы:${C_RESET}"
+            _printf_link "     ✈️ Вступить в сообщество" "${LINK_GROUP_URL}" "${C_CYAN}"; echo
+        fi
+
+        if [[ "$SHOW_SITE" == "1" ]]; then
+            echo -e "  ${C_GREEN}🌐 Официальный Репозиторий:${C_RESET}"
+            _printf_link "     🌍 Перейти на GitHub" "${LINK_SITE_URL}" "${C_CYAN}"; echo
+        fi
+    fi
+
+    print_separator "═" 64 "${C_CYAN}"
+    echo -e "  ${C_GRAY}Для возврата в меню нажми [Enter]${C_RESET}"
+    read -r _
+}
+
 # Главное меню
 show_main_menu() {
     # Перехватываем Ctrl+C только в главном меню, чтобы вывести сообщение
@@ -122,6 +214,10 @@ show_main_menu() {
         else
             printf_menu_option "q" "🚪 Выйти из решалы" "${C_CYAN}"
         fi
+
+        # Кнопка поддержки (Яркая и заметная)
+        printf_menu_option "s" " ПОДДЕРЖИ РАЗРАБОТЧИКА " "${C_BOLD}${C_YELLOW}\033[41m"
+
         print_separator "-" 60
 
         local choice
@@ -174,6 +270,9 @@ show_main_menu() {
                     else
                         printf_error "Нет такого пункта."
                     fi
+                    ;;
+                s|S)
+                    show_support_page
                     ;;
                 q|Q)
                     if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
