@@ -639,21 +639,24 @@ ExecStartPre=${bpftool_path} --debug prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS
 # Выводим список созданных файлов для отладки
 ExecStartPre=-${ls_path} -l ${PIN_PROGS}
 
-# === ПОДКЛЮЧЕНИЕ ШЕЙПЕРА (С гибким поиском имен) ===
+# === ПОДКЛЮЧЕНИЕ ШЕЙПЕРА (Автоматический поиск имен файлов) ===
 ExecStartPre=${tc_path} qdisc add dev ${IFACE} root fq
 ExecStartPre=${tc_path} qdisc add dev ${IFACE} clsact
-# Пробуем все варианты: по секции (down), по полной секции (classifier/down) или по функции
+# Ищем файл для Egress (Download): ищем 'down' в названии
 ExecStartPre=/bin/bash -c '\
-    if   [ -f ${PIN_PROGS}/down ]; then ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/down; \
-    elif [ -f ${PIN_PROGS}/cls_down ]; then ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/cls_down; \
-    elif [ -f ${PIN_PROGS}/classifier/down ]; then ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/classifier/down; \
-    else ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/reshala_handle_down; \
+    PROG_DOWN=\$(ls ${PIN_PROGS} | grep "down" | head -n 1); \
+    if [ -n "\$PROG_DOWN" ]; then \
+        ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/\$PROG_DOWN; \
+    else \
+        echo "ERROR: Download BPF program not found in ${PIN_PROGS}" >&2; exit 1; \
     fi'
+# Ищем файл для Ingress (Upload): ищем 'up' в названии
 ExecStartPre=/bin/bash -c '\
-    if   [ -f ${PIN_PROGS}/up ]; then ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/up; \
-    elif [ -f ${PIN_PROGS}/cls_up ]; then ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/cls_up; \
-    elif [ -f ${PIN_PROGS}/classifier/up ]; then ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/classifier/up; \
-    else ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/reshala_handle_up; \
+    PROG_UP=\$(ls ${PIN_PROGS} | grep "up" | head -n 1); \
+    if [ -n "\$PROG_UP" ]; then \
+        ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/\$PROG_UP; \
+    else \
+        echo "ERROR: Upload BPF program not found in ${PIN_PROGS}" >&2; exit 1; \
     fi'
 
 # === ВОССТАНОВЛЕНИЕ ПРАВИЛ ===
