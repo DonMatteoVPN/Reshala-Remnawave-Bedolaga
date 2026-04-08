@@ -1,7 +1,8 @@
 # 🚦 Шейпер трафика Reshala (eBPF + EDT) — Multi-Rule
 
-> **Версия системы:** v4.0 (Multi-Rule)
+> **Версия системы:** v4.0.1 (Multi-Rule)
 > **Движок:** eBPF + EDT (Earliest Departure Time)
+> **Поддержка ядер:** 5.4+
 > **Максимум правил:** 32 одновременно
 
 ---
