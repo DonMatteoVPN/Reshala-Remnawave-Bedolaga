@@ -589,37 +589,20 @@ _tl_generate_ebpf_service_file() {
             [[ -x "$p" ]] && { bpftool_path="$p"; break; }
         done
         
-        # Если всё ещё нет — ищем find-ом (медленно, но надёжно)
         if [[ -z "$bpftool_path" ]]; then
-            info "Запускаю тотальный поиск bpftool по всему диску..." >&2
             bpftool_path=$(find /usr/sbin /usr/bin /sbin /bin /usr/lib -name bpftool -type f -executable 2>/dev/null | head -n 1)
         fi
     fi
 
-    # 2. Если критический бинарник не найден — выходим с ЯДЕРНЫМ ПРЕДУПРЕЖДЕНИЕМ
     if [[ -z "$bpftool_path" ]]; then
-        # Используем printf %b для правильной трактовки цветов из common.sh
         printf "%b" "${C_RED}╔════════════════════════════════════════════════════════════╗${C_RESET}\n" >&2
         printf "%b" "${C_RED}║ 🔥 ЯДЕРНОЕ ПРЕДУПРЕЖДЕНИЕ: BPFTOOL НЕ НАЙДЕН!             ║${C_RESET}\n" >&2
         printf "%b" "${C_RED}╠════════════════════════════════════════════════════════════╣${C_RESET}\n" >&2
         printf "%b" "${C_WHITE}║ Твое ядро или репозиторий блокируют установку BPF-пакетов. ║${C_RESET}\n" >&2
-        printf "%b" "${C_WHITE}║ Решала пытался поставить их сам, но система отказала.      ║${C_RESET}\n" >&2
-        printf "%b" "${C_WHITE}║                                                            ║${C_RESET}\n" >&2
         printf "%b" "${C_CYAN}║ ЧТО ТЕБЕ НУЖНО СДЕЛАТЬ СЕЙЧАС (ВРУЧНУЮ):                   ║${C_RESET}\n" >&2
-        printf "%b" "${C_YELLOW}║ 1. apt update                                              ║${C_RESET}\n" >&2
-        printf "%b" "${C_YELLOW}║ 2. apt install -y linux-tools-common                       ║${C_RESET}\n" >&2
-        printf "%b" "${C_YELLOW}║ 3. apt install -y linux-tools-\$(uname -r)                   ║${C_RESET}\n" >&2
-        printf "%b" "${C_WHITE}║                                                            ║${C_RESET}\n" >&2
-        printf "%b" "${C_WHITE}║ Если ошибка повторится — твой хостинг зарезал поддержку    ║${C_RESET}\n" >&2
-        printf "%b" "${C_WHITE}║ eBPF на уровне ядра. В этом случае шейпер не запустится.    ║${C_RESET}\n" >&2
+        printf "%b" "${C_YELLOW}║ 1. apt update && apt install -y bpftool                    ║${C_RESET}\n" >&2
         printf "%b" "${C_RED}╚════════════════════════════════════════════════════════════╝${C_RESET}\n" >&2
         return 1
-    fi
-
-    # 3. Для стабильности создаем симлинк, если найден не в стандартном месте
-    if [[ "$bpftool_path" != "/usr/sbin/bpftool" && "$bpftool_path" != "/usr/bin/bpftool" ]]; then
-        ln -sf "$bpftool_path" /usr/local/bin/bpftool 2>/dev/null || true
-        bpftool_path="/usr/local/bin/bpftool"
     fi
 
     local tc_path;     tc_path=$(which tc 2>/dev/null || echo "/sbin/tc")
@@ -627,8 +610,8 @@ _tl_generate_ebpf_service_file() {
     local rm_path;     rm_path=$(which rm 2>/dev/null || echo "/bin/rm")
     local mkdir_path;  mkdir_path=$(which mkdir 2>/dev/null || echo "/bin/mkdir")
     local python_path; python_path=$(which python3 2>/dev/null || echo "/usr/bin/python3")
+    local ls_path;     ls_path=$(which ls 2>/dev/null || echo "/bin/ls")
 
-    # 3. Только теперь генерируем чистый конфиг в stdout
     cat <<EOF
 [Unit]
 Description=Reshala eBPF Traffic Limiter (Multi-Rule)
@@ -638,29 +621,36 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-Environment=LANG=C.UTF-8
-Environment=LC_ALL=C.UTF-8
-Environment=PYTHONIOENCODING=UTF-8
 
-# === СИСТЕМНЫЕ ТРЕБОВАНИЯ ===
+# === ПОДГОТОВКА ===
 ExecStartPre=-${sysctl_path} -w kernel.unprivileged_bpf_disabled=0
-
-# === ОЧИСТКА (Агрессивная) ===
 ExecStartPre=-${tc_path} qdisc del dev ${IFACE} root
 ExecStartPre=-${tc_path} qdisc del dev ${IFACE} clsact
 ExecStartPre=-${rm_path} -rf ${TL_BPF_PIN_DIR}
 ExecStartPre=${mkdir_path} -p ${PIN_PROGS} ${PIN_MAPS}
 
-# === ЗАГРУЗКА BPF-ПРОГРАММ ===
-ExecStartPre=${bpftool_path} prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} type classifier pinmaps ${PIN_MAPS}
+# === ЗАГРУЗКА И ДИАГНОСТИКА ===
+# Используем --debug для детальных логов в journalctl
+ExecStartPre=${bpftool_path} --debug prog loadall ${TL_BPF_OBJ_PATH} ${PIN_PROGS} pinmaps ${PIN_MAPS}
+# Выводим список созданных файлов для отладки
+ExecStartPre=-${ls_path} -l ${PIN_PROGS}
 
-# === ИНТЕРФЕЙС ${IFACE} ===
+# === ПОДКЛЮЧЕНИЕ ШЕЙПЕРА (С гибким поиском имен) ===
 ExecStartPre=${tc_path} qdisc add dev ${IFACE} root fq
 ExecStartPre=${tc_path} qdisc add dev ${IFACE} clsact
-ExecStartPre=${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/cls_down
-ExecStartPre=${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/cls_up
+# Пробуем подключить по имени секции (cls_down) или по имени функции (reshala_handle_down)
+ExecStartPre=/bin/bash -c 'if [ -f ${PIN_PROGS}/cls_down ]; then \
+    ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/cls_down; \
+    else \
+    ${tc_path} filter add dev ${IFACE} egress bpf direct-action pinned ${PIN_PROGS}/reshala_handle_down; \
+    fi'
+ExecStartPre=/bin/bash -c 'if [ -f ${PIN_PROGS}/cls_up ]; then \
+    ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/cls_up; \
+    else \
+    ${tc_path} filter add dev ${IFACE} ingress bpf direct-action pinned ${PIN_PROGS}/reshala_handle_up; \
+    fi'
 
-# === ВОССТАНОВЛЕНИЕ ВСЕХ ПРАВИЛ ИЗ rules.json ===
+# === ВОССТАНОВЛЕНИЕ ПРАВИЛ ===
 ExecStart=${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore
 
 # === ОСТАНОВКА ===
