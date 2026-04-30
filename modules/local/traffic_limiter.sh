@@ -854,7 +854,20 @@ EOF
     # Применяем белый список через Python-скрипт
     echo
     info "Применяю изменения..."
-    python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file"
+    local sync_out
+    sync_out=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file" 2>&1)
+    echo "$sync_out"
+    
+    if echo "$sync_out" | grep -q "whitelist_map не найден"; then
+        echo
+        echo -e "  ${C_RED}██████████████████████████████████████████████████████████████${C_RESET}"
+        echo -e "  ${C_RED}█${C_RESET}                                                            ${C_RED}█${C_RESET}"
+        echo -e "  ${C_RED}█${C_RESET}  ${C_YELLOW}ВНИМАНИЕ! Шейпер ещё не знает про Белый список!${C_RESET}           ${C_RED}█${C_RESET}"
+        echo -e "  ${C_RED}█${C_RESET}  ${C_WHITE}Тебе нужно нажать ${C_GREEN}[7] 🔄 Перезапустить движок${C_WHITE} в меню,${C_RESET}       ${C_RED}█${C_RESET}"
+        echo -e "  ${C_RED}█${C_RESET}  ${C_WHITE}чтобы новая версия загрузилась в ядро системы.${C_RESET}            ${C_RED}█${C_RESET}"
+        echo -e "  ${C_RED}█${C_RESET}                                                            ${C_RED}█${C_RESET}"
+        echo -e "  ${C_RED}██████████████████████████████████████████████████████████████${C_RESET}"
+    fi
     echo
 }
 
