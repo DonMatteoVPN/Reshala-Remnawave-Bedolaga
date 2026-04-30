@@ -16,7 +16,7 @@ fi
 # --- Цвета для вывода в терминал ---
 C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m';
 C_YELLOW='\033[1;33m'; C_CYAN='\033[0;36m'; C_BLUE='\033[0;94m'; C_BOLD='\033[1m';
-C_GRAY='\033[0;90m'; C_WHITE='\033[1;37m';
+C_GRAY='\033[0;90m'; C_WHITE='\033[1;37m'; C_MAGENTA='\033[0;35m';
 
 # Универсальный хедер для меню
 menu_header() {
@@ -407,7 +407,90 @@ validate_port() {
     return 1
 }
 
-# --- Прочие утилиты ---
+# ============================================================ #
+# ==      ГЛОБАЛЬНЫЙ БЕЛЫЙ СПИСОК: ХЕЛПЕР ДЛЯ МОДУЛЕЙ       == #
+# ============================================================ #
+# API Глобального Белого Списка (Global Whitelist)
+#
+# Файл: /etc/reshala/global-whitelist.txt
+# Менеджер: modules/security/whitelist_manager.sh
+#
+# Доступные функции (после source whitelist_manager.sh):
+#
+#   global_whitelist_get_ips    — Получить массив IP (stdout)
+#     mapfile -t ips < <(global_whitelist_get_ips)
+#
+#   global_whitelist_count      — Количество IP (stdout)
+#     local count=$(global_whitelist_count)
+#
+#   global_whitelist_add_ip IP "Комментарий" — Добавить + синхронизировать
+#     global_whitelist_add_ip "1.2.3.4" "Мой сервер"
+#
+#   global_whitelist_remove_ip IP — Удалить + синхронизировать
+#     global_whitelist_remove_ip "1.2.3.4"
+#
+#   global_whitelist_sync_all   — Принудительная полная синхронизация
+#
+#   global_whitelist_offer "module_name" — Предложить пользователю
+#     if global_whitelist_offer "my_module"; then
+#         # Пользователь выбрал глобальный список
+#     fi
+#
+# Проверка доступности API:
+#   if command -v global_whitelist_get_ips &>/dev/null; then ...
+#
+# Хелпер для загрузки менеджера:
+global_whitelist_manager_load() {
+    local manager_path="$SCRIPT_DIR/modules/security/whitelist_manager.sh"
+    if [[ -f "$manager_path" ]]; then
+        source "$manager_path"
+        return 0
+    fi
+    return 1
+}
+# ============================================================ #
+
+# Валидация IP или CIDR
+validate_ip_or_cidr() {
+    local addr="$1"
+    # Сначала проверяем простой IP
+    if validate_ip "$addr"; then return 0; fi
+    # Затем CIDR (x.x.x.x/nn)
+    if [[ "$addr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+        local ip_part="${addr%/*}"
+        local mask="${addr#*/}"
+        if validate_ip "$ip_part" && [[ "$mask" -ge 0 ]] && [[ "$mask" -le 32 ]]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Функция автоматического поиска лог-файлов
+find_log_file() {
+    local log_name="$1" # "ufw", "auth", "kernel"
+    case "$log_name" in
+        ufw)
+            if [[ -f "/var/log/ufw.log" ]]; then echo "/var/log/ufw.log"
+            elif [[ -f "/var/log/kern.log" ]]; then echo "/var/log/kern.log"
+            elif [[ -f "/var/log/syslog" ]]; then echo "/var/log/syslog"
+            else journalctl -t ufw | tail -n 100 > /tmp/reshala_ufw.log; echo "/tmp/reshala_ufw.log"
+            fi
+            ;;
+        auth)
+            if [[ -f "/var/log/auth.log" ]]; then echo "/var/log/auth.log"
+            elif [[ -f "/var/log/secure" ]]; then echo "/var/log/secure"
+            else journalctl -t sshd | tail -n 100 > /tmp/reshala_auth.log; echo "/tmp/reshala_auth.log"
+            fi
+            ;;
+        kernel)
+            if [[ -f "/var/log/kern.log" ]]; then echo "/var/log/kern.log"
+            elif [[ -f "/var/log/syslog" ]]; then echo "/var/log/syslog"
+            else dmesg | tail -n 100 > /tmp/reshala_kern.log; echo "/tmp/reshala_kern.log"
+            fi
+            ;;
+    esac
+}
 ensure_package() {
     local package_name="$1"
     if ! command -v "$package_name" &>/dev/null; then

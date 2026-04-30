@@ -63,7 +63,7 @@ _skynet_add_server_wizard() {
     printf_menu_option "1" "Использовать общий Мастер-ключ"
     printf_menu_option "2" "Создать новый УНИКАЛЬНЫЙ ключ"
     printf_menu_option "3" "Выбрать из списка существующих"
-    printf_menu_option "4" "Указать ПОЛНЫЙ ПУТЬ к ключу"
+    printf_menu_option "4" "Импортировать свой ключ (путь или вставка)"
     
     local k_choice; k_choice=$(safe_read "Выбор (1-4): " "1")
     local final_key=""
@@ -79,45 +79,11 @@ _skynet_add_server_wizard() {
             final_key=$(_select_existing_ssh_key)
             ;;
         4)
-            printf_info "Как ты хочешь добавить свой ключ?"
-            printf_menu_option "1" "Указать ПОЛНЫЙ ПУТЬ"
-            printf_menu_option "2" "Вставить СОДЕРЖИМОЕ ключа"
-            local input_method; input_method=$(safe_read "Выбор (1/2): " "1")
-            local custom_key_path=""
-
-            if [[ "$input_method" == "1" ]]; then
-                custom_key_path=$(ask_non_empty "Введи ПОЛНЫЙ путь к приватному ключу: ")
-            else
-                printf_info "Вставь содержимое приватного ключа. Для завершения введи 'ENDKEY' на новой строке."
-                local pasted_key=""
-                while IFS= read -r line; do
-                    if [[ "$line" == "ENDKEY" ]]; then break; fi
-                    pasted_key+="$line\n"
-                done
-                
-                if [[ -n "$pasted_key" ]]; then
-                    custom_key_path="${HOME}/.ssh/reshala_pasted_key_$(date +%s)"
-                    printf "%b" "$pasted_key" > "$custom_key_path"
-                    chmod 600 "$custom_key_path"
-                    printf_ok "Ключ сохранен в: $custom_key_path"
-                fi
-            fi
-
-            if [[ -z "$custom_key_path" ]]; then
-                final_key=""
-            elif [[ ! -f "$custom_key_path" || ! -r "$custom_key_path" ]]; then
-                printf_error "Файл ключа не найден или нет прав на чтение."
-                final_key=""
-            else
-                final_key="$custom_key_path"
-                if [[ ! -f "${custom_key_path}.pub" ]]; then
-                    printf_warning "Публичный ключ (.pub) не найден. Пробую создать его..."
-                    if ssh-keygen -y -f "$custom_key_path" > "${custom_key_path}.pub"; then
-                        printf_ok "Публичный ключ создан."
-                    else
-                        printf_error "Не удалось создать публичный ключ."
-                    fi
-                fi
+            _import_ssh_key
+            final_key=$(ls -t "${HOME}/.ssh/reshala_imported_"* 2>/dev/null | head -n1)
+            if [[ -z "$final_key" ]]; then
+                printf_error "Ключ не был импортирован. Отмена."
+                return
             fi
             ;;
         *)

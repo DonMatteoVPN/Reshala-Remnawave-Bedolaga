@@ -16,7 +16,8 @@ source "${SCRIPT_DIR}/modules/skynet/db.sh"
 # ВАЖНО: ВСЁ, что идёт в stdout, должно быть ТОЛЬКО путём до ключа,
 # чтобы можно было безопасно писать $( _ensure_master_key ).
 _ensure_master_key() {
-if [[ ! -f "$key_path" ]]; then
+    local key_path="${HOME}/.ssh/${SKYNET_MASTER_KEY_NAME}"
+    if [[ ! -f "$key_path" ]]; then
         printf_info "🔑 Генерирую МАСТЕР-КЛЮЧ (${SKYNET_MASTER_KEY_NAME})..." >&2
         ssh-keygen -t ed25519 -f "$key_path" -N "" -q
     fi
@@ -214,55 +215,26 @@ _delete_ssh_key() {
     sleep 1
 }
 
-# Imports an existing SSH key pair into Reshala's management
+# Imports an existing SSH key pair into Reshala's management using nano
 _import_ssh_key() {
     clear
     menu_header "📥 ИМПОРТ СВОЕГО SSH КЛЮЧА"
     echo ""
-    printf_description "Введи ПОЛНЫЙ путь к файлу твоего ПРИВАТНОГО SSH ключа."
-    printf_description "Публичный ключ (.pub) должен лежать рядом."
-    printf_description "Пример: /home/user/.ssh/id_rsa или /opt/keys/my_key"
+    printf_description "Вы можете вставить содержимое вашего ПРИВАТНОГО ключа через редактор."
+    printf_description "Публичная часть (.pub) будет создана автоматически."
     echo ""
 
-    local source_private_path
-    source_private_path=$(ask_non_empty "Путь к приватному ключу") || return
+    local key_name
+    key_name=$(ask_non_empty "Придумай имя для ключа (латиница, цифры)") || return
+    
+    # Очистка имени от мусора
+    key_name=$(echo "$key_name" | tr -cd '[:alnum:]_-')
 
-    if [[ ! -f "$source_private_path" ]]; then
-        printf_error "Файл приватного ключа не найден: %s" "$source_private_path"
-        sleep 2
-        return
-    fi
-    if [[ ! -r "$source_private_path" ]]; then
-        printf_error "Нет прав на чтение файла приватного ключа: %s" "$source_private_path"
-        sleep 2
-        return
-    fi
-
-    local source_public_path="${source_private_path}.pub"
-    if [[ ! -f "$source_public_path" ]]; then
-        printf_warning "Публичный ключ '%s' не найден." "$source_public_path"
-        if ask_yes_no "Сгенерировать публичный ключ из приватного? (y/n): " "y"; then
-            ssh-keygen -y -f "$source_private_path" > "$source_public_path"
-            if [[ $? -eq 0 ]]; then
-                printf_ok "Публичный ключ сгенерирован: %s" "$source_public_path"
-            else
-                printf_error "Не удалось сгенерировать публичный ключ. Отмена импорта."
-                sleep 2
-                return
-            fi
-        else
-            printf_info "Импорт отменен (публичный ключ отсутствует)."
-            sleep 1
-            return
-        fi
-    fi
-
-    local key_basename=$(basename "$source_private_path")
-    local target_private_path="${HOME}/.ssh/reshala_imported_${key_basename}"
+    local target_private_path="${HOME}/.ssh/reshala_imported_${key_name}"
     local target_public_path="${target_private_path}.pub"
 
-    if [[ -f "$target_private_path" || -f "$target_public_path" ]]; then
-        printf_warning "Ключ с таким именем уже существует в директории Reshala (%s)." "$target_private_path"
+    if [[ -f "$target_private_path" ]]; then
+        printf_warning "Ключ с таким именем уже существует."
         if ! ask_yes_no "Перезаписать существующий ключ? (y/n): " "n"; then
             printf_info "Импорт отменен."
             sleep 1
@@ -270,15 +242,49 @@ _import_ssh_key() {
         fi
     fi
 
-    cp "$source_private_path" "$target_private_path"
-    cp "$source_public_path" "$target_public_path"
+    # Создаем временный файл
+    local tmp_file; tmp_file=$(mktemp)
+    
+    printf_info "Сейчас откроется редактор 'nano'."
+    printf_description "1. Вставь содержимое своего ПРИВАТНОГО ключа."
+    printf_description "2. Нажми Ctrl+O, затем Enter (Сохранить)."
+    printf_description "3. Нажми Ctrl+X (Выйти)."
+    echo ""
+    printf_warning "ВНИМАНИЕ: Обязательно вставляй ключ целиком, включая BEGIN/END строки."
+    
+    wait_for_enter "Нажми Enter, чтобы открыть редактор..."
+    
+    nano "$tmp_file"
+
+    if [[ ! -s "$tmp_file" ]]; then
+        printf_error "Файл пуст. Импорт отменен."
+        rm -f "$tmp_file"
+        sleep 2
+        return
+    fi
+
+    # Проверка валидности ключа перед сохранением
+    if ! ssh-keygen -y -f "$tmp_file" >/dev/null 2>&1; then
+        printf_error "Ошибка: вставлен невалидный приватный ключ или неверный формат."
+        printf_description "Reshala поддерживает форматы OpenSSH, RSA, ED25519."
+        rm -f "$tmp_file"
+        sleep 3
+        return
+    fi
+
+    # Перемещаем в целевую директорию
+    mkdir -p "${HOME}/.ssh"
+    mv "$tmp_file" "$target_private_path"
     chmod 600 "$target_private_path"
+
+    # Генерируем публичную часть
+    ssh-keygen -y -f "$target_private_path" > "$target_public_path"
     chmod 644 "$target_public_path"
 
     printf_ok "Ключ успешно импортирован!"
-    printf_info "Приватный: %s" "$target_private_path"
-    printf_info "Публичный: %s" "$target_public_path"
-    printf_info "Теперь вы можете использовать этот ключ при добавлении или редактировании серверов."
+    printf_info "Имя в системе: reshala_imported_${key_name}"
+    printf_info "Путь: ${target_private_path}"
+    
     sleep 3
 }
 

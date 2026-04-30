@@ -17,18 +17,18 @@ show_fail2ban_menu() {
 
         _f2b_check_status
         
-        printf_menu_option "1" "Список забаненных IP"
-        printf_menu_option "2" "Разбанить IP"
-        printf_menu_option "3" "Забанить IP вручную"
-        printf_menu_option "4" "Whitelist (доверенные IP)"
-        printf_menu_option "5" "⚙️ Настройки (бан, доп. защита)"
-        print_separator "-" 40
-        printf_menu_option "6" "🔔 Уведомления Telegram"
-        
         echo ""
         if ! command -v fail2ban-client &> /dev/null; then
-            printf_menu_option "i" "Установить и настроить Fail2Ban"
+            printf_menu_option "i" "УСТАНОВИТЬ FAIL2BAN" "${C_YELLOW}"
         else
+            printf_menu_option "1" "Список забаненных IP"
+            printf_menu_option "2" "Разбанить IP"
+            printf_menu_option "3" "Забанить IP вручную"
+            printf_menu_option "4" "Whitelist (доверенные IP)"
+            printf_menu_option "5" "⚙️ Настройки (бан, доп. защита)"
+            print_separator "-" 40
+            printf_menu_option "6" "🔔 Уведомления Telegram"
+            echo ""
             printf_menu_option "s" "Перезапустить сервис"
         fi
         
@@ -250,6 +250,16 @@ _f2b_update_ignoreip() {
 }
 
 _f2b_whitelist_menu() {
+    # Предлагаем Глобальный Белый Список
+    if command -v global_whitelist_offer &>/dev/null; then
+        if global_whitelist_offer "Fail2Ban"; then
+            info "Fail2Ban будет использовать Глобальный Белый Список."
+            global_whitelist_sync_all 2>/dev/null || true
+            wait_for_enter
+            return
+        fi
+    fi
+
     # Ensure directory exists
     run_cmd mkdir -p /etc/reshala
     # Ensure file exists
@@ -264,7 +274,6 @@ _f2b_whitelist_menu() {
         print_separator
         if [[ -s "$F2B_WHITELIST_FILE" ]]; then
             info "Текущий whitelist:"
-            # Просто выводим содержимое файла, игнорируя пустые строки и комментарии
             grep -v '^\s*#' "$F2B_WHITELIST_FILE" | grep -v '^\s*$' | while read -r ip; do
                 printf_description "● $ip"
             done
@@ -398,10 +407,15 @@ _f2b_extended_menu() {
         grep -A 2 "\[nginx-bots-reshala\]" /etc/fail2ban/jail.local 2>/dev/null | grep -q "enabled = true" && \
             nginx_bots_status="(${C_GREEN}вкл${C_RESET})"
 
+        local nginx_scanners_status="(${C_RED}выкл${C_RESET})"
+        grep -A 2 "\[nginx-scanners-reshala\]" /etc/fail2ban/jail.local 2>/dev/null | grep -q "enabled = true" && \
+            nginx_scanners_status="(${C_GREEN}вкл${C_RESET})"
+
         echo ""
         printf_menu_option "1" "Защита от сканирования портов $portscan_status"
         printf_menu_option "2" "Защита от брутфорса Nginx (HTTP auth) $nginx_auth_status"
         printf_menu_option "3" "Блокировка вредоносных ботов Nginx $nginx_bots_status"
+        printf_menu_option "4" "Защита Nginx от сканеров (auto-detect) $nginx_scanners_status"
         echo ""
         printf_menu_option "a" "Включить все"
         printf_menu_option "d" "Выключить все"
@@ -416,6 +430,7 @@ _f2b_extended_menu() {
             1) _f2b_toggle_jail "portscan-reshala" && run_cmd systemctl reload fail2ban ;;
             2) _f2b_toggle_jail "nginx-auth-reshala" && run_cmd systemctl reload fail2ban ;;
             3) _f2b_toggle_jail "nginx-bots-reshala" && run_cmd systemctl reload fail2ban ;;
+            4) _f2b_setup_nginx_scanners; wait_for_enter ;;
             a|A)
                 info "Включаю все расширенные защиты..."
                 _f2b_toggle_jail "portscan-reshala" "true"
@@ -479,6 +494,17 @@ _f2b_setup() {
     
     # --- Собираем ignoreip ---
     local ignoreip="127.0.0.1/8 ::1"
+
+    # Берем IP из Глобального Белого Списка, если доступен
+    if command -v global_whitelist_get_ips &>/dev/null; then
+        local gwl_ips
+        gwl_ips=$(global_whitelist_get_ips | tr '\n' ' ')
+        if [[ -n "$gwl_ips" ]]; then
+            ignoreip="$ignoreip $gwl_ips"
+            info "Загружено IP из Глобального Белого Списка: ${C_CYAN}$(echo $gwl_ips | wc -w)${C_RESET}"
+        fi
+    fi
+
     # Получаем IP текущей сессии
     local current_ip
     current_ip=$(who -m | awk '{print $5}' | tr -d '()')
@@ -486,11 +512,16 @@ _f2b_setup() {
         ignoreip="$ignoreip $current_ip"
         info "Ваш текущий IP ${C_CYAN}${current_ip}${C_RESET} будет добавлен в whitelist."
         
-        # Добавляем в файл whitelist
-        run_cmd mkdir -p /etc/reshala
-        run_cmd touch "$F2B_WHITELIST_FILE"
-        if ! grep -q "$current_ip" "$F2B_WHITELIST_FILE"; then
-            echo "$current_ip # Auto-added on setup" | run_cmd tee -a "$F2B_WHITELIST_FILE" > /dev/null
+        # Добавляем в Глобальный Белый Список
+        if command -v global_whitelist_add_ip &>/dev/null; then
+            global_whitelist_add_ip "$current_ip" "Auto-added on F2B setup" 2>/dev/null || true
+        else
+            # Фоллбэк: локальный файл
+            run_cmd mkdir -p /etc/reshala
+            run_cmd touch "$F2B_WHITELIST_FILE"
+            if ! grep -q "$current_ip" "$F2B_WHITELIST_FILE"; then
+                echo "$current_ip # Auto-added on setup" | run_cmd tee -a "$F2B_WHITELIST_FILE" > /dev/null
+            fi
         fi
     fi
     # ---
@@ -528,5 +559,120 @@ JAIL
     else
         err "Не удалось запустить Fail2Ban. Проверьте 'systemctl status fail2ban'."
     fi
+}
+
+# --- Nginx Scanners Jail с автопоиском логов ---
+_f2b_setup_nginx_scanners() {
+    print_separator
+    info "Защита Nginx от сканеров (nginx-scanners)"
+    print_separator
+
+    if [[ ! -f "/etc/fail2ban/jail.local" ]]; then
+        err "Fail2Ban не настроен. Сначала установите его."
+        return
+    fi
+
+    # Автопоиск файлов логов nginx
+    info "Автопоиск файлов логов Nginx..."
+    local found_logs=()
+
+    # Стандартные пути
+    local standard_paths=(
+        "/var/log/nginx/access.log"
+        "/var/log/nginx/error.log"
+        "/var/log/nginx/access_stream.log"
+        "/var/log/nginx/error_stream.log"
+    )
+    for p in "${standard_paths[@]}"; do
+        [[ -f "$p" ]] && found_logs+=("$p")
+    done
+
+    # Docker volumes
+    local docker_paths
+    if command -v docker &>/dev/null; then
+        mapfile -t docker_paths < <(docker inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\n"}}{{end}}{{end}}' $(docker ps -q) 2>/dev/null | grep -i "log\|nginx" | sort -u)
+        for dp in "${docker_paths[@]}"; do
+            [[ -d "$dp" ]] && mapfile -t -O ${#found_logs[@]} found_logs < <(find "$dp" -name "*access*" -o -name "*error*" 2>/dev/null | head -5)
+        done
+    fi
+
+    # Дополнительный поиск
+    if [[ ${#found_logs[@]} -eq 0 ]]; then
+        mapfile -t found_logs < <(find /var/log /opt /home -name "*nginx*access*" -o -name "*nginx*error*" 2>/dev/null | head -10)
+    fi
+
+    local selected_log=""
+    if [[ ${#found_logs[@]} -gt 0 ]]; then
+        ok "Найдены файлы логов Nginx (${#found_logs[@]}):"
+        local i=1
+        for log_file in "${found_logs[@]}"; do
+            local size
+            size=$(du -h "$log_file" 2>/dev/null | awk '{print $1}')
+            printf_description "  ${C_WHITE}${i})${C_RESET} ${log_file} ${C_GRAY}(${size:-?})${C_RESET}"
+            ((i++))
+        done
+        echo ""
+        printf_menu_option "m" "Ввести путь вручную"
+        echo ""
+
+        local choice
+        choice=$(safe_read "Выберите файл лога" "1") || return
+
+        if [[ "$choice" == "m" || "$choice" == "M" ]]; then
+            selected_log=$(ask_non_empty "Введите полный путь к файлу лога") || return
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#found_logs[@]} ]]; then
+            selected_log="${found_logs[$((choice-1))]}"
+        else
+            err "Неверный выбор."
+            return
+        fi
+    else
+        warn "Файлы логов Nginx не найдены автоматически."
+        selected_log=$(ask_non_empty "Введите полный путь к access.log") || return
+    fi
+
+    if [[ ! -f "$selected_log" ]]; then
+        err "Файл ${selected_log} не существует."
+        return
+    fi
+
+    ok "Выбран файл: ${C_CYAN}${selected_log}${C_RESET}"
+
+    # Создаём фильтр
+    info "Создаю фильтр для nginx-scanners..."
+    cat <<'FILTER' | run_cmd tee /etc/fail2ban/filter.d/nginx-scanners-reshala.conf > /dev/null
+[Definition]
+failregex = ^<HOST> .* "(GET|POST|HEAD) .*(\.php|\.env|\.git|\.asp|wp-login|wp-admin|cgi-bin|/admin|/config|/setup|\.sql|shell|eval|passwd|\.bak).*" (400|403|404|444)
+            ^<HOST> .* "(GET|POST) .*(xmlrpc|wp-cron|wp-json/wp/v2/users).*" (403|404)
+ignoreregex =
+FILTER
+
+    # Добавляем/обновляем jail
+    if grep -q "\[nginx-scanners-reshala\]" /etc/fail2ban/jail.local 2>/dev/null; then
+        # Обновляем существующий
+        run_cmd sed -i "/\[nginx-scanners-reshala\]/,/^\[/{
+            s|^logpath.*|logpath = ${selected_log}|
+            s|^enabled.*|enabled = true|
+        }" /etc/fail2ban/jail.local
+        ok "Jail nginx-scanners-reshala обновлён."
+    else
+        # Добавляем новый
+        cat <<JAIL | run_cmd tee -a /etc/fail2ban/jail.local > /dev/null
+
+[nginx-scanners-reshala]
+enabled = true
+port = http,https
+filter = nginx-scanners-reshala
+logpath = ${selected_log}
+maxretry = 3
+findtime = 600
+bantime = 86400
+action = ufw[name=nginx-scanners, port=http, protocol=tcp]
+JAIL
+        ok "Jail nginx-scanners-reshala создан."
+    fi
+
+    run_cmd systemctl reload fail2ban 2>/dev/null || run_cmd systemctl restart fail2ban
+    ok "Nginx Scanners защита активирована! Логфайл: ${C_CYAN}${selected_log}${C_RESET}"
 }
 

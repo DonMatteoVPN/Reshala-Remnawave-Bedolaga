@@ -25,6 +25,7 @@
 # Подключаем ядро и зависимости
 source "$SCRIPT_DIR/modules/core/common.sh"
 source "$SCRIPT_DIR/modules/core/dependencies.sh"
+source "$SCRIPT_DIR/modules/security/whitelist_manager.sh"
 
 # ============================================================ #
 # ==                  ГЛОБАЛЬНАЯ КОНФИГУРАЦИЯ               == #
@@ -559,6 +560,12 @@ _tl_apply_limit_ebpf_wizard() {
         pen=$(ask_number_in_range    "Длительность штрафа (секунд)"       0 86400 60)  || return
     fi
 
+    # ── Шаг 5: Белый список ──
+    local use_gwl="false"
+    if global_whitelist_offer "Traffic Limiter"; then
+        use_gwl="true"
+    fi
+
     # ── Финальная проверка ──
     local dl_mbit; dl_mbit=$(echo "$down_speed * 8" | bc -l | xargs printf "%.1f")
     local ul_mbit; ul_mbit=$(echo "$up_speed   * 8" | bc -l | xargs printf "%.1f")
@@ -578,6 +585,7 @@ _tl_apply_limit_ebpf_wizard() {
         print_key_value "Burst"   "${burst} МБ в окне ${win}с" 25
         print_key_value "Штраф"   "${pspeed} МБ/с на ${pen}с" 25
     fi
+    print_key_value "Белый список" "$( [[ "$use_gwl" == "true" ]] && echo "ГЛОБАЛЬНЫЙ (Активен)" || echo "Нет" )" 25
     echo
     if ! ask_yes_no "Применить?"; then return; fi
 
@@ -643,6 +651,11 @@ EOF
         --burst   "${burst}" \
         --win     "${win}" \
         --pen-sec "${pen}"
+
+    # Синхронизируем whitelist если выбрано
+    if [[ "$use_gwl" == "true" ]]; then
+        global_whitelist_sync_all
+    fi
 }
 
 _tl_generate_ebpf_service_file() {
@@ -811,6 +824,31 @@ _tl_restart_ebpf_engine() {
 
 _tl_edit_whitelist() {
     clear; menu_header "🛡️ Белый список (Whitelist)"
+
+    # Предлагаем Глобальный Белый Список, если он доступен
+    if command -v global_whitelist_offer &>/dev/null; then
+        if global_whitelist_offer "Шейпер"; then
+            local whitelist_file="${TL_CONFIG_DIR}/whitelist.txt"
+            mkdir -p "${TL_CONFIG_DIR}"
+            info "Копирую IP из Глобального Белого Списка в шейпер..."
+            # Копируем глобальный список в файл шейпера
+            cp -f "/etc/reshala/global-whitelist.txt" "$whitelist_file" 2>/dev/null || true
+            # Синхронизируем BPF-карту
+            local sync_out
+            sync_out=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file" 2>&1)
+            echo "$sync_out"
+            if echo "$sync_out" | grep -q "whitelist_map не найден"; then
+                echo ""
+                echo -e "  ${C_RED}██████████████████████████████████████████████████████████████${C_RESET}"
+                echo -e "  ${C_RED}█${C_RESET}  ${C_YELLOW}ВНИМАНИЕ! Нажми ${C_GREEN}[7] 🔄 Перезапустить движок${C_YELLOW} для применения.${C_RESET}  ${C_RED}█${C_RESET}"
+                echo -e "  ${C_RED}██████████████████████████████████████████████████████████████${C_RESET}"
+            else
+                ok "Глобальный Белый Список синхронизирован с шейпером."
+            fi
+            wait_for_enter
+            return
+        fi
+    fi
     
     echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
     echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}💡 Что такое Белый список?${C_RESET}"

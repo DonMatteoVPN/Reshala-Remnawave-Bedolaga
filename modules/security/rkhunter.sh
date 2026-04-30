@@ -19,12 +19,15 @@ show_rkhunter_menu() {
         _rkh_check_status
         
         echo ""
-        printf_menu_option "1" "Включить/Выключить еженедельное сканирование"
-        printf_menu_option "2" "Запустить сканирование сейчас"
-        printf_menu_option "3" "Обновить базы rkhunter"
-        printf_menu_option "4" "Показать лог сканирования"
-        echo ""
-        printf_menu_option "i" "Установить и настроить rkhunter"
+        if ! command -v rkhunter &> /dev/null; then
+            printf_menu_option "i" "УСТАНОВИТЬ RKHUNTER" "${C_YELLOW}"
+        else
+            printf_menu_option "1" "Включить/Выключить еженедельное сканирование"
+            printf_menu_option "2" "Запустить сканирование сейчас"
+            printf_menu_option "3" "Обновить базы rkhunter"
+            printf_menu_option "4" "Показать лог сканирования"
+        fi
+        
         echo ""
         printf_menu_option "b" "Назад"
         echo ""

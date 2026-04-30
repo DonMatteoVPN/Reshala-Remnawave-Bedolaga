@@ -59,11 +59,14 @@ _backup_create() {
         "/etc/fail2ban/jail.local"
         "$SYSCTL_CONF_FILE"
         "$F2B_WHITELIST_FILE"
+        "/etc/reshala/global-whitelist.txt"
+        "/etc/reshala/geoblock/countries.txt"
         "${SCRIPT_DIR}/config/reshala.conf"
         "/root/.ssh/authorized_keys"
     )
     local dirs_to_backup=(
         "/etc/ufw"
+        "/etc/reshala"
     )
 
     for file in "${files_to_backup[@]}"; do
