@@ -31,53 +31,55 @@ fi
 
 # --- Основная логика ---
 SSH_CONFIG_FILE="/etc/ssh/sshd_config"
-info "Меняю порт SSH с $OLD_SSH_PORT на $NEW_SSH_PORT..."
+JAIL_CONFIG="/etc/fail2ban/jail.local"
 
-# --- Шаг 1: Открываем новый порт в Firewall ---
+info "Запуск процесса смены порта: $OLD_SSH_PORT -> $NEW_SSH_PORT..."
+
+# --- Шаг 1: Подготовка Firewall (UFW) ---
 if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
-    info "Открываю порт $NEW_SSH_PORT в UFW..."
-    ufw allow "$NEW_SSH_PORT"/tcp >/dev/null
+    info "Обновляю правила UFW..."
+    ufw allow "$NEW_SSH_PORT"/tcp comment 'SSH New Port' >/dev/null
+    # Старый пока не закрываем — это наш спасательный круг!
 fi
 
-# --- Шаг 2: Меняем порт в sshd_config ---
-info "Обновляю $SSH_CONFIG_FILE..."
+# --- Шаг 2: Обновление Fail2Ban (если есть) ---
+if [[ -f "$JAIL_CONFIG" ]]; then
+    info "Обновляю порт в Fail2Ban (jail.local)..."
+    sed -i "s/^port = .*/port = $NEW_SSH_PORT/" "$JAIL_CONFIG"
+    systemctl restart fail2ban || true
+fi
+
+# --- Шаг 3: Меняем порт в sshd_config ---
+info "Обновляю конфиг SSH..."
 backup_file="${SSH_CONFIG_FILE}.bak_$(date +%s)"
 cp "$SSH_CONFIG_FILE" "$backup_file"
 
 sed -i -e "s/^#*Port .*/Port $NEW_SSH_PORT/" "$SSH_CONFIG_FILE"
-if ! grep -q "^Port " "$SSH_CONFIG_FILE"; then
-    echo "Port $NEW_SSH_PORT" >> "$SSH_CONFIG_FILE"
-fi
 
-# --- Шаг 3: Перезапуск и проверка ---
+# --- Шаг 4: Перезапуск и проверка ---
 info "Перезапускаю сервис SSH..."
 if ! (systemctl restart sshd || systemctl restart ssh); then
-    warn "ОШИБКА: Не удалось перезапустить сервис SSH. Откатываю изменения..."
+    warn "КРИТИЧЕСКАЯ ОШИБКА: SSH не перезапустился. Откатываюсь..."
     mv "$backup_file" "$SSH_CONFIG_FILE"
-    (systemctl restart sshd || systemctl restart ssh) || true
-    ufw delete allow "$NEW_SSH_PORT"/tcp >/dev/null 2>/dev/null || true
-    err "Не удалось перезапустить SSH после изменения конфига."
+    systemctl restart sshd || systemctl restart ssh || true
+    err "Не удалось сменить порт. Конфигурация восстановлена."
 fi
 
-# Короткая пауза, чтобы сервис успел запуститься
 sleep 2
-
-# Проверяем, слушает ли сервис новый порт
 if ! ss -tlnp | grep -q ":$NEW_SSH_PORT"; then
-    warn "ОШИБКА: Сервис SSH не слушает новый порт. Откатываю изменения..."
+    warn "Сервис SSH не слушает новый порт. Откат..."
     mv "$backup_file" "$SSH_CONFIG_FILE"
-    (systemctl restart sshd || systemctl restart ssh) || true
-    ufw delete allow "$NEW_SSH_PORT"/tcp >/dev/null 2>/dev/null || true
-    err "Сервис SSH не запустился на новом порту $NEW_SSH_PORT."
+    systemctl restart sshd || systemctl restart ssh || true
+    err "Проверка порта $NEW_SSH_PORT провалена."
 fi
 
-ok "Сервис SSH теперь слушает порт $NEW_SSH_PORT."
+ok "SSH успешно переведен на порт $NEW_SSH_PORT."
 
-# --- Шаг 4: Успех! Закрываем старый порт ---
+# --- Шаг 5: Финализация Firewall ---
 if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
     info "Закрываю старый порт $OLD_SSH_PORT в UFW..."
     ufw delete allow "$OLD_SSH_PORT"/tcp >/dev/null 2>/dev/null || true
 fi
 
-ok "Порт SSH успешно изменен на $NEW_SSH_PORT."
+ok "Интеграция завершена: SSH + Firewall + Fail2Ban синхронизированы."
 exit 0

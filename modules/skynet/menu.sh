@@ -20,13 +20,12 @@
 # @item( skynet_server | 3 | 📝 Редактировать запись | _sm_edit | 30 | 1 )
 # @item( skynet_server | 4 | 🗑️ Удалить сервер | _sm_delete | 40 | 1 )
 #
-# @item( skynet_server_security | 0 | 🔎 Статус безопасности | _sss_get_status | 10 | 1 | Показывает общую сводку по безопасности. )
-# @item( skynet_server_security | 1 | 🔒 Усилить SSH | _sss_harden_ssh | 20 | 2 | Отключает вход по паролю, меняет порт и т.д. )
-# @item( skynet_server_security | 2 | 🔢 Сменить порт SSH | _sss_change_port | 30 | 2 | Меняет порт SSH на случайный или указанный. )
-# @item( skynet_server_security | 3 | 🔥 Настроить Firewall | _sss_setup_ufw | 40 | 3 | Устанавливает и настраивает UFW. )
-# @item( skynet_server_security | 4 | 🔨 Настроить Fail2Ban | _sss_setup_f2b | 50 | 3 | Устанавливает и настраивает Fail2Ban. )
-# @item( skynet_server_security | 5 | 🧠 Применить настройки ядра | _sss_apply_kernel | 60 | 4 | Применяет безопасные sysctl-настройки. )
-# @item( skynet_server_security | 6 | 🔔 Уведомления о входе | _sss_setup_login_notify | 70 | 4 | Настраивает уведомления в Telegram о SSH-входе. )
+# @item( skynet_server_security | 0 | 🔎 Статус защиты | _sss_get_status | 10 | 1 | Показывает текущий статус защиты удаленного сервера. )
+# @item( skynet_server_security | 1 | 🛡️ Усилить защиту SSH | _sss_harden_ssh | 20 | 2 | Отключает вход по паролю, настраивает ключи и лимиты. )
+# @item( skynet_server_security | 2 | 🔢 Сменить порт SSH | _sss_change_port | 30 | 2 | Меняет порт SSH с автоматическим обновлением Firewall и Fail2Ban. )
+# @item( skynet_server_security | 3 | 🔥 Настроить Firewall | _sss_setup_ufw | 40 | 3 | Установка UFW и синхронизация с Глобальным Белым Списком. )
+# @item( skynet_server_security | 4 | 🔨 Настроить Fail2Ban | _sss_setup_f2b | 50 | 3 | Установка Fail2Ban и добавление Белого Списка в ignoreip. )
+# @item( skynet_server_security | 5 | 🔔 Уведомления | _sss_setup_login_notify | 60 | 4 | Настройка уведомлений в Telegram о входах на сервер. )
 #
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 1
@@ -364,27 +363,49 @@ _show_server_security_menu() {
     local s_name s_user s_ip s_port s_key s_pass
     IFS='|' read -r s_name s_user s_ip s_port s_key s_pass <<< "$server_data"
 
+    # --- Вспомогательная функция для проброса GWL ---
+    _sss_get_gwl_env() {
+        local gwl_file="/etc/reshala/global-whitelist.txt"
+        local env_str="TARGET_SSH_PORT=$s_port"
+        if [[ -f "$gwl_file" ]]; then
+            # Кодируем в base64 без переносов строк
+            local b64_content; b64_content=$(base64 -w0 "$gwl_file" 2>/dev/null || base64 "$gwl_file" | tr -d '\n' || echo "")
+            if [[ -n "$b64_content" ]]; then
+                env_str="${env_str} GWL_B64=${b64_content}"
+            fi
+        fi
+        echo "$env_str"
+    }
+
     # --- Внутренние функции-действия ---
     _sss_get_status() {
-        _skynet_run_plugin_on_server "security/00_get_security_status.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        _skynet_run_plugin_on_server "plugins/skynet_commands/security/00_get_security_status.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
     }
     _sss_harden_ssh() {
-        _skynet_run_plugin_on_server "security/01_harden_ssh.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        local env; env=$(_sss_get_gwl_env)
+        _skynet_run_plugin_on_server_with_env "plugins/skynet_commands/security/01_harden_ssh.sh" "$env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
     }
     _sss_change_port() {
-        _skynet_run_plugin_on_server "security/02_change_ssh_port.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        local new_port; new_port=$(ask_number_in_range "Введи новый порт SSH: " 1024 65535 "2222") || return
+        local env; env=$(_sss_get_gwl_env)
+        env="${env} OLD_SSH_PORT=$s_port NEW_SSH_PORT=$new_port"
+        _skynet_run_plugin_on_server_with_env "plugins/skynet_commands/security/02_change_ssh_port.sh" "$env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        
+        # Если порт успешно изменен, обновляем его в базе Скайнета (локально)
+        # Это потребует доработки db.sh, но пока просто уведомляем
+        ok "Если команда выполнена успешно, не забудь обновить порт сервера в настройках Skynet!"
     }
     _sss_setup_ufw() {
-        _skynet_run_plugin_on_server "security/03_setup_ufw.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        local env; env=$(_sss_get_gwl_env)
+        _skynet_run_plugin_on_server_with_env "plugins/skynet_commands/security/03_setup_ufw.sh" "$env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
     }
     _sss_setup_f2b() {
-        _skynet_run_plugin_on_server "security/04_setup_fail2ban.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
-    }
-    _sss_apply_kernel() {
-        _skynet_run_plugin_on_server "security/05_apply_kernel.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        local env; env=$(_sss_get_gwl_env)
+        _skynet_run_plugin_on_server_with_env "plugins/skynet_commands/security/04_setup_fail2ban.sh" "$env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
     }
     _sss_setup_login_notify() {
-        _skynet_run_plugin_on_server "security/06_setup_ssh_login_notify.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        local env; env=$(_sss_get_gwl_env)
+        _skynet_run_plugin_on_server_with_env "plugins/skynet_commands/security/06_setup_ssh_login_notify.sh" "$env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
     }
     # --- Конец внутренних функций ---
 

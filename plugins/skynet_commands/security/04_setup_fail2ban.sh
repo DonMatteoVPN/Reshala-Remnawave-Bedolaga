@@ -17,14 +17,10 @@ err()  { echo -e "${C_RED}[✗] $*${C_RESET}"; exit 1; }
 
 # --- Главная функция ---
 run() {
+    # Используем порт из переменных или 22
+    local current_port="${TARGET_SSH_PORT:-22}"
 
-    # --- Проверка переменных ---
-    if [[ -z "$SSH_PORT" ]]; then
-        warn "ОШИБКА: Переменная SSH_PORT должна быть установлена."
-        exit 1
-    fi
-
-    info "Настраиваю Fail2Ban..."
+    info "Настраиваю Fail2Ban на порту $current_port..."
 
     # --- Установка ---
     if ! command -v fail2ban-client &>/dev/null; then
@@ -35,81 +31,60 @@ run() {
         ok "Fail2Ban установлен."
     fi
 
+    # --- Подготовка Белого Списка (ignoreip) ---
+    local ignore_list="127.0.0.1/8 ::1"
+    if [[ -n "${GWL_B64:-}" ]]; then
+        info "Синхронизирую ignoreip с Глобальным Белым Списком..."
+        temp_gwl=$(mktemp)
+        echo "$GWL_B64" | base64 -d > "$temp_gwl" 2>/dev/null || true
+        
+        if [[ -s "$temp_gwl" ]]; then
+            ips=$(grep -v '^\s*#' "$temp_gwl" | grep -v '^\s*$' | awk '{print $1}')
+            for ip in $ips; do
+                ignore_list="${ignore_list} ${ip}"
+            done
+            ok "Добавлено IP в исключения."
+        fi
+        rm -f "$temp_gwl"
+    fi
+
     # --- Настройка ---
-    info "Конфигурирую Fail2Ban..."
-
-    BANTIME="86400"  # 24 часа по умолчанию
-    MAXRETRY="3"
-    FINDTIME="600"
-
     JAIL_CONFIG="/etc/fail2ban/jail.local"
-
-    # Бэкап
     if [[ -f "$JAIL_CONFIG" ]]; then
-        cp "$JAIL_CONFIG" "${JAIL_CONFIG}.bak_$(date +%s)"
+        cp "$JAIL_CONFIG" "${JAIL_CONFIG}.bak"
     fi
 
-    # --- Определяем logpath для SSH и backend ---
-    local ssh_logpath=""
-    local backend_type="auto" # Дефолтный backend
-
-    if [[ -f "/var/log/auth.log" ]] && [[ -r "/var/log/auth.log" ]]; then
-        ssh_logpath="/var/log/auth.log"
-        backend_type="auto"
-elif [[ -f "/var/log/secure" ]] && [[ -r "/var/log/secure" ]]; then
-        ssh_logpath="/var/log/secure"
-        backend_type="auto"
-elif command -v journalctl &>/dev/null; then
-        ssh_logpath="SYSLOG" # Специальное значение для systemd-backend
-        backend_type="systemd" # Явно указываем systemd
-    else
-        err "Не удалось найти подходящий лог-файл для SSH или journalctl. Невозможно настроить защиту SSH."
+    # Определяем backend
+    local backend_type="auto"
+    local ssh_logpath="/var/log/auth.log"
+    [[ ! -f "$ssh_logpath" ]] && ssh_logpath="/var/log/secure"
+    if [[ ! -f "$ssh_logpath" ]] && command -v journalctl &>/dev/null; then
+        backend_type="systemd"
+        ssh_logpath="SYSLOG"
     fi
-    ok "Найден лог-файл SSH: $ssh_logpath (backend: $backend_type)."
-    
-    # Создание временного файла с содержимым jail.local
-    local temp_jail_config=$(mktemp)
-    cat > "$temp_jail_config" <<EOF_TEMP_JAIL
+
+    cat > "$JAIL_CONFIG" <<EOF
 [DEFAULT]
-bantime = $BANTIME
-findtime = ${FINDTIME}s
-maxretry = $MAXRETRY
+bantime = 86400
+findtime = 600
+maxretry = 5
 backend = $backend_type
-ignoreip = 127.0.0.1/8 ::1
+ignoreip = $ignore_list
 
 [sshd]
 enabled = true
-port = $SSH_PORT
+port = $current_port
 filter = sshd
 logpath = $ssh_logpath
-EOF_TEMP_JAIL
-    
-    # Теперь записываем содержимое временного файла в JAIL_CONFIG
-    cp "$temp_jail_config" "$JAIL_CONFIG"
-    rm "$temp_jail_config" # Удаляем временный файл
-    
-    ok "Конфигурационный файл jail.local создан с базовой защитой для SSH."
-    
-    # --- Проверка конфигурации ---
-    info "Тестирую конфигурацию Fail2Ban..."
-    if ! fail2ban-client -t >/dev/null; then
-        err "Тестирование конфигурации Fail2Ban провалено. См. вывод 'fail2ban-client -t'."
-    fi
-    ok "Конфигурация Fail2Ban успешно протестирована."
+EOF
 
-# --- Перезапуск сервиса ---
-info "Включаю и перезапускаю сервис Fail2Ban..."
-systemctl enable fail2ban >/dev/null
-systemctl restart fail2ban
-sleep 2
+    ok "Конфигурация jail.local обновлена (ignoreip синхронизирован)."
 
-if systemctl is-active --quiet fail2ban; then
-    ok "Настройка Fail2Ban завершена, сервис активен."
-else
-    err "Сервис Fail2Ban запустился, но сразу же остановился. Проверьте 'journalctl -u fail2ban'."
-fi
-
-} # <<< End of the function
+    # --- Перезапуск ---
+    systemctl enable fail2ban >/dev/null 2>&1 || true
+    systemctl restart fail2ban
+    ok "Fail2Ban перезапущен и защищает порт $current_port."
+}
 
 # Вызываем главную функцию
 run

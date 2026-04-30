@@ -16,23 +16,28 @@ err()  { echo -e "${C_RED}[✗] $*${C_RESET}"; exit 1; }
 # --- End of helpers ---
 
 # --- Проверка переменных ---
-if [[ -z "$SSH_PORT" ]]; then
-    warn "ОШИБКА: Переменная SSH_PORT должна быть установлена."
-    exit 1
+if [[ -z "$TARGET_SSH_PORT" ]]; then
+    TARGET_SSH_PORT=22
 fi
 
-info "Настраиваю файрвол UFW по профилю 'Нода'..."
+info "Настраиваю файрвол UFW (Профиль: Универсальный)..."
 
 # --- Установка UFW ---
 if ! command -v ufw &>/dev/null; then
     info "UFW не найден. Устанавливаю..."
+    export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq >/dev/null
-    apt-get install -y ufw >/dev/null
+    apt-get install -y -qq ufw >/dev/null
     ok "UFW установлен."
 fi
 
 # --- Настройка правил ---
 info "Конфигурирую правила UFW..."
+
+# Включаем поддержку IPv6 в конфиге UFW
+if [[ -f "/etc/default/ufw" ]]; then
+    sed -i 's/^IPV6=.*/IPV6=yes/' "/etc/default/ufw"
+fi
 
 # Сброс на случай, если уже что-то было
 ufw --force reset >/dev/null
@@ -41,40 +46,40 @@ ufw --force reset >/dev/null
 ufw default deny incoming >/dev/null
 ufw default allow outgoing >/dev/null
 
-# Разрешаем SSH
-if [[ -n "$ADMIN_IP" ]]; then
-    ufw allow from "$ADMIN_IP" to any port "$SSH_PORT" proto tcp comment 'Admin SSH' >/dev/null
-    ok "SSH (порт $SSH_PORT) разрешен для админа: $ADMIN_IP"
+# --- СИНХРОНИЗАЦИЯ ГЛОБАЛЬНОГО БЕЛОГО СПИСКА ---
+if [[ -n "${GWL_B64:-}" ]]; then
+    info "Синхронизирую Глобальный Белый Список с Мастер-сервера..."
+    temp_gwl=$(mktemp)
+    echo "$GWL_B64" | base64 -d > "$temp_gwl" 2>/dev/null || true
+    
+    if [[ -s "$temp_gwl" ]]; then
+        # Читаем IP, игнорируя комментарии
+        ips=$(grep -v '^\s*#' "$temp_gwl" | grep -v '^\s*$' | awk '{print $1}')
+        count=0
+        for ip in $ips; do
+            ufw allow from "$ip" comment 'GWL Trusted' >/dev/null
+            ((count++))
+        done
+        ok "Добавлено $count IP из Глобального Белого Списка."
+    fi
+    rm -f "$temp_gwl"
+else
+    warn "Глобальный Белый Список не передан. Используются только стандартные правила."
 fi
 
-# Разрешаем доступ для панели
-if [[ -n "$PANEL_IP" ]]; then
-    ufw allow from "$PANEL_IP" comment 'Panel Full Access' >/dev/null
-    ok "Полный доступ разрешен для панели: $PANEL_IP"
-fi
+# Разрешаем SSH для всех (если не в GWL), иначе можно потерять доступ
+# Если GWL был пуст, то это единственный способ зайти.
+ufw allow "$TARGET_SSH_PORT"/tcp comment 'SSH Port' >/dev/null
+ok "Порт SSH ($TARGET_SSH_PORT) открыт."
 
-if [[ -z "$ADMIN_IP" && -z "$PANEL_IP" ]]; then
-    ufw allow "$SSH_PORT"/tcp comment 'SSH' >/dev/null
-    warn "SSH (порт $SSH_PORT) открыт для всех. Рекомендуется указать IP админа или панели."
-elif [[ -z "$ADMIN_IP" && -n "$PANEL_IP" ]]; then
-     ufw allow "$SSH_PORT"/tcp comment 'SSH' >/dev/null
-     warn "Порт SSH открыт для всех для гарантии подключения. Ограничьте его вручную при необходимости."
-fi
-
-# Основной порт для VPN
-ufw allow 443 comment 'VPN/HTTPS' >/dev/null
-ok "Порт 443 (VPN/HTTPS) открыт."
+# Основной порт для VPN (стандарт Reshala)
+ufw allow 443/tcp comment 'VPN/HTTPS' >/dev/null
+ufw allow 443/udp comment 'VPN/UDP' >/dev/null
+ok "Порты 443 TCP/UDP (VPN) открыты."
 
 # Включаем UFW
 echo "y" | ufw enable >/dev/null
-ok "UFW активирован."
-
-# Отключаем IPv6, если он не нужен
-if [[ -f "/etc/default/ufw" ]] && grep -q "^IPV6=yes" "/etc/default/ufw"; then
-    sed -i 's/^IPV6=yes/IPV6=no/' "/etc/default/ufw"
-    ufw reload >/dev/null
-    ok "IPv6 в UFW отключен."
-fi
+ok "UFW активирован и работает (IPv6: ON)."
 
 ok "Настройка файрвола завершена."
 exit 0

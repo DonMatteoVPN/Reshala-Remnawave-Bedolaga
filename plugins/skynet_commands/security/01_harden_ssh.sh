@@ -21,11 +21,9 @@ err()  { echo -e "${C_RED}[✗] $*${C_RESET}"; exit 1; }
 # --- Основная логика ---
 SSH_CONFIG_FILE="/etc/ssh/sshd_config"
 BACKUP_FILE="${SSH_CONFIG_FILE}.bak_reshala_$(date +%s)"
-# Используем порт из переменной окружения или 22 по умолчанию
 TARGET_PORT=${TARGET_SSH_PORT:-22} 
 
-info "Применяю усиление защиты SSH (Harden)..."
-info "Целевой порт: $TARGET_PORT"
+info "Применяю усиление защиты SSH (Harden) на порту $TARGET_PORT..."
 
 if [[ ! -f "$SSH_CONFIG_FILE" ]]; then
     err "sshd_config не найден в $SSH_CONFIG_FILE"
@@ -49,29 +47,38 @@ declare -A ssh_settings=(
 
 for key in "${!ssh_settings[@]}"; do
     value="${ssh_settings[$key]}"
-    # Remove old entry
     sed -i -e "/^#*${key}/d" "$SSH_CONFIG_FILE"
-    # Add new entry
     echo "${key} ${value}" >> "$SSH_CONFIG_FILE"
 done
-
 ok "sshd_config обновлен."
 
 # Restart SSH
 info "Перезапускаю сервис SSH..."
 if ! (systemctl restart sshd || systemctl restart ssh); then
-    warn "ОШИБКА: Не удалось перезапустить сервис SSH. Откатываю изменения..."
-    # Rollback
+    warn "КРИТИЧЕСКАЯ ОШИБКА: SSH не перезапустился. Откат..."
     cp "$BACKUP_FILE" "$SSH_CONFIG_FILE"
-    systemctl restart sshd || systemctl restart ssh || true # Try to restart, but don't exit if it fails again
-    err "Не удалось применить изменения и перезапустить SSH."
+    systemctl restart sshd || systemctl restart ssh || true
+    err "Не удалось применить Harden-настройки."
 fi
 ok "Сервис SSH успешно перезапущен."
 
-# Open port in UFW if active
+# --- СИНХРОНИЗАЦИЯ С ГЛОБАЛЬНЫМ БЕЛЫМ СПИСКОМ ---
 if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
-    info "Открываю порт $TARGET_PORT в UFW..."
-    ufw allow "$TARGET_PORT"/tcp >/dev/null
+    info "Синхронизирую доступ через Firewall..."
+    ufw allow "$TARGET_PORT"/tcp comment 'SSH' >/dev/null
+    
+    if [[ -n "${GWL_B64:-}" ]]; then
+        temp_gwl=$(mktemp)
+        echo "$GWL_B64" | base64 -d > "$temp_gwl" 2>/dev/null || true
+        if [[ -s "$temp_gwl" ]]; then
+            ips=$(grep -v '^\s*#' "$temp_gwl" | grep -v '^\s*$' | awk '{print $1}')
+            for ip in $ips; do
+                ufw allow from "$ip" comment 'GWL Trusted' >/dev/null
+            done
+            ok "Доверенные IP из Глобального списка добавлены в UFW."
+        fi
+        rm -f "$temp_gwl"
+    fi
 fi
 
 ok "Усиление защиты SSH успешно применено."
