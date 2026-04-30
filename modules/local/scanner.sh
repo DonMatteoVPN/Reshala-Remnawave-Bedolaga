@@ -18,6 +18,11 @@ GEO_DB="$SCANNER_DIR/Country.mmdb"
 INPUT_FILE="$SCANNER_DIR/in.txt"
 RECON_DIR="$SCANNER_DIR/recon"
 
+# --- БЛОК СОВМЕСТИМОСТИ ЦВЕТОВ (Для старых модулей) ---
+YELLOW=$C_YELLOW; RED=$C_RED; GREEN=$C_GREEN; BLUE=$C_BLUE; CYAN=$C_CYAN
+MAGENTA=$C_MAGENTA; GRAY=$C_GRAY; BOLD=$C_BOLD; RESET=$C_RESET; NC=$C_RESET
+# -----------------------------------------------------
+
 # --- 1. УСТАНОВКА И СБОРКА ---
 check_scanner_install() {
     export PATH=/usr/local/go/bin:$PATH
@@ -26,8 +31,8 @@ check_scanner_install() {
     # Очистка от старого мусора (убиваем дефолтный out.csv)
     rm -f "$SCANNER_DIR/out.csv" 2>/dev/null
 
-if [[ ! -f "$SCANNER_BIN" ]]; then
-        echo -e "${YELLOW}[*] Сканер не найден. Начинаю установку (Go 1.22+)...${NC}"
+    if [[ ! -f "$SCANNER_BIN" ]]; then
+        echo -e "${C_YELLOW}[*] Сканер не найден. Начинаю установку (Go 1.22+)...${C_RESET}"
         
         # ⚡ ЕДИНЫЙ СТАНДАРТ: Установка пакетов
         ensure_package "git"
@@ -49,7 +54,7 @@ if [[ ! -f "$SCANNER_BIN" ]]; then
         run_cmd git clone "https://github.com/xtls/RealiTLScanner.git" "$SCANNER_DIR/RealiTLScanner_src" || return 1
         
         cd "$SCANNER_DIR/RealiTLScanner_src" || return
-        echo -e "${CYAN}[*] Компиляция бинарника...${NC}"
+        echo -e "${C_CYAN}[*] Компиляция бинарника...${C_RESET}"
         go build -o "$SCANNER_BIN"
         
         if [[ -f "$SCANNER_BIN" ]]; then 
@@ -67,21 +72,21 @@ if [[ ! -f "$SCANNER_BIN" ]]; then
 }
 
 show_geo_help() {
-    echo -e "\n${CYAN}📋 СПРАВОЧНИК ПОПУЛЯРНЫХ КОДОВ СТРАН (ISO 3166-1 alpha-2):${NC}"
-    echo -e "${GRAY}FI - Финляндия | NL - Нидерланды | DE - Германия | FR - Франция${NC}"
-    echo -e "${GRAY}US - США       | GB - Великобрит.| RU - Россия   | PL - Польша${NC}"
-    echo -e "${GRAY}SE - Швеция    | CH - Швейцария  | ES - Испания  | TR - Турция${NC}\n"
+    echo -e "\n${C_CYAN}📋 СПРАВОЧНИК ПОПУЛЯРНЫХ КОДОВ СТРАН (ISO 3166-1 alpha-2):${C_RESET}"
+    echo -e "${C_GRAY}FI - Финляндия | NL - Нидерланды | DE - Германия | FR - Франция${C_RESET}"
+    echo -e "${C_GRAY}US - США       | GB - Великобрит.| RU - Россия   | PL - Польша${C_RESET}"
+    echo -e "${C_GRAY}SE - Швеция    | CH - Швейцария  | ES - Испания  | TR - Турция${C_RESET}\n"
 }
 
 # --- 2. РЕЖИМ "РЕНТГЕН" И ПРОБИВ ПРОВАЙДЕРА (ОДНА ЦЕЛЬ) ---
 run_single_scan() {
     clear
-    echo -e "${MAGENTA}======================================================${NC}"
-    echo -e "${BOLD} 🔬 РЕЖИМ: СТРОГИЙ СКАН И ПРОБИВ ЦЕЛИ (OSINT)${NC}"
-    echo -e "${MAGENTA}======================================================${NC}"
-    echo -e "${CYAN}Для чего это нужно?${NC}"
-    echo -e "${GRAY}Скрипт проверяет конкретный сервер, выдает его полное TLS-досье и ищет${NC}"
-    echo -e "${GRAY}сайт хостинг-провайдера (чтобы вы могли арендовать сервер там же).${NC}\n"
+    echo -e "${C_MAGENTA}======================================================${C_RESET}"
+    echo -e "${C_BOLD} 🔬 РЕЖИМ: СТРОГИЙ СКАН И ПРОБИВ ЦЕЛИ (OSINT)${C_RESET}"
+    echo -e "${C_MAGENTA}======================================================${C_RESET}"
+    echo -e "${C_CYAN}Для чего это нужно?${C_RESET}"
+    echo -e "${C_GRAY}Скрипт проверяет конкретный сервер, выдает его полное TLS-досье и ищет${C_RESET}"
+    echo -e "${C_GRAY}сайт хостинг-провайдера (чтобы вы могли арендовать сервер там же).${C_RESET}\n"
 
     read -p ">> Введите цель (IP или Домен): " target
     [[ -z "$target" ]] && return
@@ -93,18 +98,18 @@ run_single_scan() {
         local safe_target=$target
     fi
 
-    echo -e "\n${BLUE}--- ⚙️ ТОНКАЯ НАСТРОЙКА ---${NC}"
-    echo -e "${YELLOW}1. Целевые порты (-port)${NC}"
-    echo -e "${GRAY}Обычно маскировка Reality работает на HTTPS порту 443.${NC}"
-    echo -e "${GRAY}Но можно указать несколько (напр: 443, 8443). Скрипт проверит их по очереди.${NC}"
+    echo -e "\n${C_BLUE}--- ⚙️ ТОНКАЯ НАСТРОЙКА ---${C_RESET}"
+    echo -e "${C_YELLOW}1. Целевые порты (-port)${C_RESET}"
+    echo -e "${C_GRAY}Обычно маскировка Reality работает на HTTPS порту 443.${C_RESET}"
+    echo -e "${C_GRAY}Но можно указать несколько (напр: 443, 8443). Скрипт проверит их по очереди.${C_RESET}"
     read -p ">> Порт(ы) через запятую (Enter = 443): " s_port
     s_port=${s_port:-443}
     IFS=',' read -ra PORT_ARRAY <<< "${s_port// /}"
 
-    echo -e "\n${GREEN}[*] ЗАПУСК СКАНИРОВАНИЯ И СБОР ДАННЫХ (OSINT)...${NC}"
-    echo -e "${RED}⚠️ ВАЖНО: Вы можете прервать процесс, нажав [Ctrl+C] в любой момент!${NC}"
-    echo -e "${GRAY}Скрипт НЕ закроется. Он просто досрочно остановит проверку портов,${NC}"
-    echo -e "${GRAY}сохранит всё, что успел найти, и покажет вам готовое досье.${NC}\n"
+    echo -e "\n${C_GREEN}[*] ЗАПУСК СКАНИРОВАНИЯ И СБОР ДАННЫХ (OSINT)...${C_RESET}"
+    echo -e "${C_RED}⚠️ ВАЖНО: Вы можете прервать процесс, нажав [Ctrl+C] в любой момент!${C_RESET}"
+    echo -e "${C_GRAY}Скрипт НЕ закроется. Он просто досрочно остановит проверку портов,${C_RESET}"
+    echo -e "${C_GRAY}сохранит всё, что успел найти, и покажет вам готовое досье.${C_RESET}\n"
     
     local REPORT_OUTPUT=""
     local nl=$'\n'
@@ -144,7 +149,7 @@ run_single_scan() {
     cd "$SCANNER_DIR" || return
     export PATH=/usr/local/go/bin:$PATH
     
-    trap 'echo -e "\n${YELLOW}🛑 Процесс прерван пользователем. Формируем досье...${NC}"; break' INT
+    trap 'echo -e "\n${C_YELLOW}🛑 Процесс прерван пользователем. Формируем досье...${C_RESET}"; break' INT
 
     for current_port in "${PORT_ARRAY[@]}"; do
         REPORT_OUTPUT+=" >>> СКАНИРОВАНИЕ ПОРТА: ${current_port} <<<${nl}"
