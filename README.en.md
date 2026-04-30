@@ -12,7 +12,7 @@
 
 <p align="center">
   <br>
-  <strong>⚠️ ATTENTION: THIS PROJECT IS IN ACTIVE DEVELOPMENT (ALPHA STAGE) ⚠️</strong>
+  <strong>⚠️ ATTENTION: THIS PROJECT IS IN ACTIVE DEVELOPMENT ⚠️</strong>
   <br>
   <em>Use at your own risk. Bugs and unpredictable behavior are expected.</em>
   <br>
