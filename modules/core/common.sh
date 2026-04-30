@@ -385,14 +385,20 @@ ask_selection() {
 # Функция проверки IP адреса
 validate_ip() {
     local ip="$1"
+    # Проверка IPv4
     if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         local IFS=.
         local -a octets=($ip)
         for octet in "${octets[@]}"; do
+            [[ $octet =~ ^0[0-9]+ ]] && return 1 # Запрет ведущих нулей (01.02.03.04)
             if ((octet > 255)); then
                 return 1
             fi
         done
+        return 0
+    fi
+    # Проверка IPv6 (упрощенная, но достаточная для большинства случаев)
+    if [[ $ip =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]]; then
         return 0
     fi
     return 1

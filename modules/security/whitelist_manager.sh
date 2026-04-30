@@ -61,7 +61,7 @@ TEMPLATE
 # Использование: mapfile -t ips < <(global_whitelist_get_ips)
 global_whitelist_get_ips() {
     _gwl_ensure_file
-    grep -v '^\s*#' "$GLOBAL_WHITELIST_FILE" | grep -v '^\s*$' | awk '{print $1}' | grep -E '^[0-9]'
+    grep -v '^\s*#' "$GLOBAL_WHITELIST_FILE" | grep -v '^\s*$' | awk '{print $1}' | grep -E '^[0-9a-fA-F]'
 }
 
 # Возвращает количество IP в списке
@@ -228,18 +228,27 @@ _gwl_sync_geoblock() {
         return
     fi
 
-    # Создаем whitelist ipset если его нет
-    if ! ipset list reshala_geo_whitelist &>/dev/null; then
-        run_cmd ipset create reshala_geo_whitelist hash:ip hashsize 256 maxelem 1024 2>/dev/null || true
-    fi
+    # Нам нужно два сета, так как ipset не смешивает v4 и v6
+    for family in "inet" "inet6"; do
+        local set_name="reshala_geo_whitelist"
+        [[ "$family" == "inet6" ]] && set_name="reshala_geo_whitelist6"
 
-    # Очищаем и заполняем заново
-    run_cmd ipset flush reshala_geo_whitelist 2>/dev/null || true
-    for ip in "${ips[@]}"; do
-        run_cmd ipset add reshala_geo_whitelist "$ip" 2>/dev/null || true
+        if ! ipset list "$set_name" &>/dev/null; then
+            run_cmd ipset create "$set_name" hash:ip family "$family" hashsize 256 maxelem 1024 2>/dev/null || true
+        fi
+        run_cmd ipset flush "$set_name" 2>/dev/null || true
     done
 
-    debug_log "GWL_SYNC: Geo-block whitelist обновлен (${#ips[@]} IP)."
+    # Распределяем IP по сетам
+    for ip in "${ips[@]}"; do
+        if [[ "$ip" == *":"* ]]; then
+            run_cmd ipset add reshala_geo_whitelist6 "$ip" 2>/dev/null || true
+        else
+            run_cmd ipset add reshala_geo_whitelist "$ip" 2>/dev/null || true
+        fi
+    done
+
+    debug_log "GWL_SYNC: Geo-block whitelist (v4/v6) обновлен."
 }
 
 # ============================================================ #
@@ -289,7 +298,7 @@ show_global_whitelist_menu() {
             printf_description "  ${C_GRAY}○${C_RESET} Fail2Ban (не установлен)"
         fi
         # Шейпер
-        if [[ -d "/sys/fs/bpf/reshala_shaper/maps" ]]; then
+        if [[ -d "/sys/fs/bpf/reshala/maps" ]]; then
             printf_description "  ${C_GREEN}✓${C_RESET} eBPF Шейпер (whitelist_map)"
         else
             printf_description "  ${C_GRAY}○${C_RESET} eBPF Шейпер (движок не запущен)"
@@ -308,6 +317,7 @@ show_global_whitelist_menu() {
         printf_menu_option "2" "➖ Удалить IP"
         printf_menu_option "3" "🔄 Принудительная синхронизация"
         printf_menu_option "4" "📋 Авто-определить мой IP"
+        printf_menu_option "5" "📝 Ручное редактирование (Editor)"
         echo ""
         printf_menu_option "b" "Назад"
         echo ""
@@ -318,9 +328,18 @@ show_global_whitelist_menu() {
         case "$choice" in
             1)
                 local new_ip new_comment
-                new_ip=$(ask_non_empty "Введите IP адрес") || continue
-                new_comment=$(safe_read "Комментарий (имя/описание)" "Manual") || continue
-                global_whitelist_add_ip "$new_ip" "$new_comment"
+                while true; do
+                    new_ip=$(ask_non_empty "Введите IP адрес (или 'q' для отмены)") || break
+                    [[ "$new_ip" == "q" ]] && break
+                    
+                    if validate_ip "$new_ip"; then
+                        new_comment=$(safe_read "Комментарий (имя/описание)" "Manual") || break
+                        global_whitelist_add_ip "$new_ip" "$new_comment"
+                        break
+                    else
+                        warn "Некорректный IP: $new_ip. Попробуй еще раз (пример: 1.2.3.4)"
+                    fi
+                done
                 wait_for_enter
                 ;;
             2)
@@ -340,6 +359,14 @@ show_global_whitelist_menu() {
                 ;;
             4)
                 _gwl_autodetect_ip
+                wait_for_enter
+                ;;
+            5)
+                info "Открываю список в редакторе..."
+                sleep 1
+                nano "$GLOBAL_WHITELIST_FILE"
+                ok "Изменения сохранены. Запускаю синхронизацию..."
+                global_whitelist_sync_all
                 wait_for_enter
                 ;;
             b|B)
