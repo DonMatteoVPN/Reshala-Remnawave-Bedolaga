@@ -82,6 +82,13 @@ show_traffic_limiter_menu() {
         local status_icon="${C_GRAY}[∅ Не настроен]${C_RESET}"
         if [[ "$is_active" == "true" ]]; then status_icon="${C_GREEN}[✓ Работает: eBPF активен]${C_RESET}"; fi
 
+        local wl_count=0
+        if [[ -f "${TL_CONFIG_DIR}/whitelist.txt" ]]; then
+            wl_count=$(grep -v '^\s*#' "${TL_CONFIG_DIR}/whitelist.txt" | grep -v '^\s*$' | wc -l)
+        fi
+        local wl_status="${C_GRAY}[0]${C_RESET}"
+        if [[ "$wl_count" -gt 0 ]]; then wl_status="${C_GREEN}[✓ IP: ${wl_count}]${C_RESET}"; fi
+
         printf_menu_option "1" "📋 Активные правила ${status_icon}"
         printf_menu_option "2" "📊 Статистика (топ IP по правилам)"
         printf_menu_option "3" "➕ Добавить / изменить правило"
@@ -90,7 +97,7 @@ show_traffic_limiter_menu() {
         printf_menu_option "6" "📜 Посмотреть лог сервиса"
         printf_menu_option "7" "🔄 Перезапустить движок"
         printf_menu_option "8" "📈 Мониторинг (iftop)"
-        printf_menu_option "9" "🛡️  Белый список (Whitelist)"
+        printf_menu_option "9" "🛡️  Белый список (Whitelist) ${wl_status}"
         echo; printf_menu_option "b" "🔙 Назад"; print_separator "-" 60
 
         local choice; choice=$(safe_read "Твой выбор") || break
@@ -848,9 +855,7 @@ EOF
     echo
     info "Применяю изменения..."
     python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file"
-    
     echo
-    wait_for_enter
 }
 
 _tl_complete_cleanup_wizard() {
