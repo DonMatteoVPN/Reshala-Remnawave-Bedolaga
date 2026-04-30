@@ -824,72 +824,69 @@ _tl_restart_ebpf_engine() {
 
 _tl_edit_whitelist() {
     clear; menu_header "🛡️ Белый список (Whitelist)"
+    
+    local whitelist_file="${TL_CONFIG_DIR}/whitelist.txt"
+    local global_file="/etc/reshala/global-whitelist.txt"
+    mkdir -p "${TL_CONFIG_DIR}"
 
-    # Предлагаем Глобальный Белый Список, если он доступен
-    if command -v global_whitelist_offer &>/dev/null; then
-        if global_whitelist_offer "Шейпер"; then
-            local whitelist_file="${TL_CONFIG_DIR}/whitelist.txt"
-            mkdir -p "${TL_CONFIG_DIR}"
-            info "Копирую IP из Глобального Белого Списка в шейпер..."
-            # Копируем глобальный список в файл шейпера
-            cp -f "/etc/reshala/global-whitelist.txt" "$whitelist_file" 2>/dev/null || true
-            # Синхронизируем BPF-карту
-            local sync_out
-            sync_out=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file" 2>&1)
-            echo "$sync_out"
-            if echo "$sync_out" | grep -q "whitelist_map не найден"; then
-                echo ""
-                echo -e "  ${C_RED}██████████████████████████████████████████████████████████████${C_RESET}"
-                echo -e "  ${C_RED}█${C_RESET}  ${C_YELLOW}ВНИМАНИЕ! Нажми ${C_GREEN}[7] 🔄 Перезапустить движок${C_YELLOW} для применения.${C_RESET}  ${C_RED}█${C_RESET}"
-                echo -e "  ${C_RED}██████████████████████████████████████████████████████████████${C_RESET}"
-            else
-                ok "Глобальный Белый Список синхронизирован с шейпером."
+    # --- УМНОЕ ПРЕДЛОЖЕНИЕ ГЛОБАЛЬНОГО СПИСКА ---
+    if [[ -f "$global_file" ]]; then
+        local is_synced=false
+        if [[ -f "$whitelist_file" ]]; then
+            # Сравниваем файлы (игнорируя комментарии и пустые строки)
+            local local_sum; local_sum=$(grep -v '^\s*#' "$whitelist_file" | grep -v '^\s*$' | sort | md5sum | awk '{print $1}')
+            local global_sum; global_sum=$(grep -v '^\s*#' "$global_file" | grep -v '^\s*$' | sort | md5sum | awk '{print $1}')
+            [[ "$local_sum" == "$global_sum" ]] && is_synced=true
+        fi
+
+        if [[ "$is_synced" == "true" ]]; then
+            echo -e "  ${C_GREEN}✓ Текущий список синхронизирован с Глобальным Белым Списком.${C_RESET}"
+            echo -e "  ${C_GRAY}Изменения в Глобальном списке будут автоматически применяться здесь.${C_RESET}\n"
+        else
+            # Если не синхронизировано или локального списка нет — ПРЕДЛАГАЕМ СРАЗУ
+            if global_whitelist_offer "Шейпер"; then
+                info "Копирую IP из Глобального Белого Списка в шейпер..."
+                cp -f "$global_file" "$whitelist_file" 2>/dev/null || true
+                
+                info "Синхронизирую eBPF карты..."
+                local sync_out
+                sync_out=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file" 2>&1)
+                
+                if echo "$sync_out" | grep -q "whitelist_map не найден"; then
+                    warn "Шейпер ещё не загружен в ядро. Нажми [7] для старта."
+                else
+                    ok "Глобальный список успешно подключен и активен!"
+                fi
+                wait_for_enter
+                return
             fi
-            wait_for_enter
-            return
         fi
     fi
     
+    # --- СТАНДАРТНОЕ ОКНО РЕДАКТИРОВАНИЯ (если отказался или уже всё ок) ---
     echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}💡 Что такое Белый список?${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}💡 Управление исключениями${C_RESET}"
     echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  IP-адреса, добавленные в этот список, будут полностью"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GREEN}игнорировать все ограничения скорости${C_RESET} (скачивание"
-    echo -e "  ${C_CYAN}║${C_RESET}  и отдача на максимальной пропускной способности канала)."
+    echo -e "  ${C_CYAN}║${C_RESET}  IP-адреса в этом списке будут игнорировать шейпер."
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GREEN}Скорость для них будет максимально возможной.${C_RESET}"
     echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Формат записи:${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}192.168.1.100 # Комментарий (имя пользователя)${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}2001:db8::1   # IPv6 тоже поддерживается${C_RESET}"
-    echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}После закрытия редактора список применится мгновенно,${C_RESET}"
-    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}без перезапуска всего шейпера!${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Формат: IP # Описание (IPv4 или IPv6)${C_RESET}"
     echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
     echo
     
-    if ! ask_yes_no "Открыть редактор белого списка?" "y"; then return; fi
+    if ! ask_yes_no "Открыть редактор списка?" "y"; then return; fi
 
-    local whitelist_file="${TL_CONFIG_DIR}/whitelist.txt"
-    mkdir -p "${TL_CONFIG_DIR}"
-    
     # Создаем шаблон, если файла нет
     if [ ! -f "$whitelist_file" ]; then
         cat <<EOF > "$whitelist_file"
 # Белый список IP-адресов (Whitelist)
-# Указанные здесь IP будут полностью игнорировать шейпер.
 # Формат: IP-адрес # Комментарий (имя)
-# Пример:
-# 192.168.1.100 # Мой сервер
-# 2001:db8::1   # Мой IPv6
 EOF
     fi
 
-    # Открываем в nano (или vi)
     local editor="${EDITOR:-nano}"
-    if ! command -v "$editor" &>/dev/null; then editor="vi"; fi
-    
     $editor "$whitelist_file"
     
-    # Применяем белый список через Python-скрипт
     echo
     info "Применяю изменения..."
     local sync_out
@@ -897,14 +894,7 @@ EOF
     echo "$sync_out"
     
     if echo "$sync_out" | grep -q "whitelist_map не найден"; then
-        echo
-        echo -e "  ${C_RED}██████████████████████████████████████████████████████████████${C_RESET}"
-        echo -e "  ${C_RED}█${C_RESET}                                                            ${C_RED}█${C_RESET}"
-        echo -e "  ${C_RED}█${C_RESET}  ${C_YELLOW}ВНИМАНИЕ! Шейпер ещё не знает про Белый список!${C_RESET}           ${C_RED}█${C_RESET}"
-        echo -e "  ${C_RED}█${C_RESET}  ${C_WHITE}Тебе нужно нажать ${C_GREEN}[7] 🔄 Перезапустить движок${C_WHITE} в меню,${C_RESET}       ${C_RED}█${C_RESET}"
-        echo -e "  ${C_RED}█${C_RESET}  ${C_WHITE}чтобы новая версия загрузилась в ядро системы.${C_RESET}            ${C_RED}█${C_RESET}"
-        echo -e "  ${C_RED}█${C_RESET}                                                            ${C_RED}█${C_RESET}"
-        echo -e "  ${C_RED}██████████████████████████████████████████████████████████████${C_RESET}"
+        echo -e "  ${C_YELLOW}⚠️ ВНИМАНИЕ! Не забудь перезапустить движок [7] для применения.${C_RESET}"
     fi
     echo
 }
