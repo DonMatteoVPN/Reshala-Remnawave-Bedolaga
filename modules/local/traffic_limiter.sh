@@ -90,6 +90,7 @@ show_traffic_limiter_menu() {
         printf_menu_option "6" "📜 Посмотреть лог сервиса"
         printf_menu_option "7" "🔄 Перезапустить движок"
         printf_menu_option "8" "📈 Мониторинг (iftop)"
+        printf_menu_option "9" "🛡️  Белый список (Whitelist)"
         echo; printf_menu_option "b" "🔙 Назад"; print_separator "-" 60
 
         local choice; choice=$(safe_read "Твой выбор") || break
@@ -103,6 +104,7 @@ show_traffic_limiter_menu() {
             6) _tl_view_service_log ;;
             7) _tl_restart_ebpf_engine ;;
             8) _tl_monitor_traffic ;;
+            9) _tl_edit_whitelist ;;
             *) warn "Нет такого пункта." ;;
         esac
         wait_for_enter
@@ -727,8 +729,9 @@ ExecStartPre=/bin/bash -c '\
         echo "ERROR: Upload BPF program not found in ${PIN_PROGS}" >&2; exit 1; \
     fi'
 
-# === ВОССТАНОВЛЕНИЕ ПРАВИЛ ===
+# === ВОССТАНОВЛЕНИЕ ПРАВИЛ И БЕЛОГО СПИСКА ===
 ExecStart=${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore
+ExecStartPost=-${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} whitelist-sync --file ${TL_CONFIG_DIR}/whitelist.txt
 
 # === ОСТАНОВКА ===
 ExecStop=-/bin/bash -c "${rm_path} -rf ${TL_BPF_PIN_DIR}/*"
@@ -797,6 +800,57 @@ _tl_restart_ebpf_engine() {
     
     systemctl unmask "${TL_SERVICE_NAME}" &>/dev/null || true
     systemctl restart "${TL_SERVICE_NAME}" && ok "Перезапущено."
+}
+
+_tl_edit_whitelist() {
+    clear; menu_header "🛡️ Белый список (Whitelist)"
+    
+    echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}💡 Что такое Белый список?${C_RESET}"
+    echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  IP-адреса, добавленные в этот список, будут полностью"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GREEN}игнорировать все ограничения скорости${C_RESET} (скачивание"
+    echo -e "  ${C_CYAN}║${C_RESET}  и отдача на максимальной пропускной способности канала)."
+    echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}Формат записи:${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}192.168.1.100 # Комментарий (имя пользователя)${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}2001:db8::1   # IPv6 тоже поддерживается${C_RESET}"
+    echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}После закрытия редактора список применится мгновенно,${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_GRAY}без перезапуска всего шейпера!${C_RESET}"
+    echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+    echo
+    
+    if ! ask_yes_no "Открыть редактор белого списка?" "y"; then return; fi
+
+    local whitelist_file="${TL_CONFIG_DIR}/whitelist.txt"
+    mkdir -p "${TL_CONFIG_DIR}"
+    
+    # Создаем шаблон, если файла нет
+    if [ ! -f "$whitelist_file" ]; then
+        cat <<EOF > "$whitelist_file"
+# Белый список IP-адресов (Whitelist)
+# Указанные здесь IP будут полностью игнорировать шейпер.
+# Формат: IP-адрес # Комментарий (имя)
+# Пример:
+# 192.168.1.100 # Мой сервер
+# 2001:db8::1   # Мой IPv6
+EOF
+    fi
+
+    # Открываем в nano (или vi)
+    local editor="${EDITOR:-nano}"
+    if ! command -v "$editor" &>/dev/null; then editor="vi"; fi
+    
+    $editor "$whitelist_file"
+    
+    # Применяем белый список через Python-скрипт
+    echo
+    info "Применяю изменения..."
+    python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file"
+    
+    echo
+    wait_for_enter
 }
 
 _tl_complete_cleanup_wizard() {

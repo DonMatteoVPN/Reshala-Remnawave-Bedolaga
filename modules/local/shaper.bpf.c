@@ -42,6 +42,11 @@ struct user_rule_key {
     __u32 _pad;      /* alignment */
 };
 
+/* IP key for whitelist */
+struct ip_key {
+    __u32 addr[4];
+};
+
 /* Per-user EDT state */
 struct user_state {
     __u64 bytes_in_window;
@@ -68,6 +73,14 @@ struct {
     __type(key,   __u32);
     __type(value, struct rule_config);
 } config_map SEC(".maps");
+
+/* Whitelist map (IPs that bypass shaping) */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key,   struct ip_key);
+    __type(value, __u8);
+} whitelist_map SEC(".maps");
 
 /* Download user states  ({ip, rule_id} → user_state) */
 struct {
@@ -102,7 +115,7 @@ static __always_inline int process_packet(
     struct user_rule_key user_key = {0};
     __u16 sport = 0, dport = 0;
     __u8  proto = 0;
-    void *trans_hdr = NULL;
+    void *trans_hdr = (void *)0;
 
     /* ── Parse IP header ── */
     if (eth->h_proto == bpf_htons(ETH_P_IP)) {
@@ -130,6 +143,17 @@ static __always_inline int process_packet(
         return TC_ACT_OK;
     }
 
+    /* ── Check whitelist ── */
+    struct ip_key w_key = {0};
+    w_key.addr[0] = user_key.addr[0];
+    w_key.addr[1] = user_key.addr[1];
+    w_key.addr[2] = user_key.addr[2];
+    w_key.addr[3] = user_key.addr[3];
+
+    if (bpf_map_lookup_elem(&whitelist_map, &w_key)) {
+        return TC_ACT_OK;
+    }
+
     /* ── Parse transport ports ── */
     if (proto == IPPROTO_TCP) {
         struct tcphdr *tcp = (struct tcphdr *)trans_hdr;
@@ -150,7 +174,7 @@ static __always_inline int process_packet(
      * For UL (user→server): dport = server listening port  → match dport
      * We try both so the same port_rule_map works for both directions.
      */
-    __u32 *rule_id_p = NULL;
+    __u32 *rule_id_p = (void *)0;
     __u32  s32 = sport, d32 = dport;
 
     if (s32 > 0) rule_id_p = bpf_map_lookup_elem(&port_rule_map, &s32);

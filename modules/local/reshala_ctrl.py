@@ -15,6 +15,7 @@ import subprocess
 import argparse
 import os
 import json
+import ipaddress
 
 # Принудительно ставим UTF-8, чтобы не было UnicodeEncodeError в systemd и урезанных SSH-сессиях
 if hasattr(sys.stdout, 'reconfigure'):
@@ -32,12 +33,12 @@ MAX_RULES  = 32   # Must match shaper.bpf.c #define MAX_RULES
 # ────────────────────────────────────────────────────────────
 
 def parse_ports(ports_str):
-    """'443,80,0' → [443, 80] | '0' → []"""
+    """'443,80,0' → [443, 80, 0] | '0' → [0]"""
     try:
         parts = [int(p.strip()) for p in str(ports_str).split(',') if p.strip()]
     except ValueError:
         return []
-    return [p for p in parts if 0 < p <= 65535][:MAX_PORTS]
+    return [p for p in parts if 0 <= p <= 65535][:MAX_PORTS]
 
 def run_cmd(cmd, check=True):
     try:
@@ -317,6 +318,73 @@ def restore_rules(pin_dir, rules_file=DEFAULT_RULES_FILE):
             rules_file    = rules_file,
         )
 
+# ────────────────────────────────────────────────────────────
+# Whitelist (Белый список)
+# ────────────────────────────────────────────────────────────
+
+def ip_to_key_hex(ip_str):
+    """Конвертирует строковый IP в 16-байтный hex-ключ (4x u32 LE)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        if ip.version == 4:
+            # IPv4: 4 bytes + 12 bytes zeros
+            return " ".join(f"{b:02x}" for b in ip.packed) + " 00 00 00 00 00 00 00 00 00 00 00 00"
+        else:
+            # IPv6: 16 bytes
+            return " ".join(f"{b:02x}" for b in ip.packed)
+    except ValueError:
+        return None
+
+def sync_whitelist(pin_dir, whitelist_file):
+    """Синхронизирует BPF-карту whitelist_map с содержимым файла."""
+    map_name = "whitelist_map"
+    pin_path = os.path.join(pin_dir, map_name)
+    if not os.path.exists(pin_path):
+        print(f"ℹ️  BPF map {map_name} не найден. Пропуск.")
+        return
+
+    # Очистка текущей карты
+    existing = bpftool_map_dump(pin_dir, map_name)
+    for entry in existing:
+        k = entry.get('key')
+        if isinstance(k, list):
+            k_hex = " ".join(f"{b:02x}" if isinstance(b, int) else b for b in k)
+            bpftool_map_delete(pin_dir, map_name, k_hex)
+
+    if not os.path.exists(whitelist_file):
+        print(f"ℹ️  Файл белого списка не существует: {whitelist_file}. Создаем пустой.")
+        # Create empty template
+        os.makedirs(os.path.dirname(whitelist_file), exist_ok=True)
+        with open(whitelist_file, "w", encoding="utf-8") as f:
+            f.write("# Белый список IP-адресов (Whitelist)\n")
+            f.write("# Указанные здесь IP будут полностью игнорировать шейпер (скачивание/отдача на максимальной скорости).\n")
+            f.write("# Формат: IP-адрес # Комментарий (необязательно)\n")
+            f.write("# Пример:\n")
+            f.write("# 192.168.1.100 # Мой компьютер\n")
+            f.write("# 2001:db8::1   # Мой IPv6 сервер\n")
+        return
+
+    count = 0
+    with open(whitelist_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            
+            # Извлекаем IP (всё, что до первого символа '#')
+            ip_part = line.split("#")[0].strip()
+            
+            key_hex = ip_to_key_hex(ip_part)
+            if key_hex:
+                # 01 = просто флаг, что IP в белом списке
+                bpftool_map_update(pin_dir, map_name, key_hex, "01")
+                count += 1
+            else:
+                print(f"⚠️  Неверный IP-адрес в белом списке: {ip_part}")
+                
+    print(f"✅ В белый список (whitelist) загружено IP-адресов: {count}")
+
+
 
 def list_rules(pin_dir, rules_file=DEFAULT_RULES_FILE):
     """Показывает сводку всех активных правил."""
@@ -540,6 +608,10 @@ def build_parser():
     # rules — список правил
     sub.add_parser("rules", help="Показать все активные правила")
 
+    # whitelist-sync — синхронизировать белый список
+    p_wl = sub.add_parser("whitelist-sync", help="Синхронизировать белый список IP из файла")
+    p_wl.add_argument("--file", type=str, required=True, help="Путь к файлу белого списка")
+
     # restore — восстановить правила из JSON (для ExecStart сервиса)
     sub.add_parser("restore", help="Восстановить все правила из rules.json")
 
@@ -573,6 +645,9 @@ if __name__ == "__main__":
 
     elif args.command == "rules":
         list_rules(pin, rules_file=rf)
+
+    elif args.command == "whitelist-sync":
+        sync_whitelist(pin, whitelist_file=args.file)
 
     elif args.command == "restore":
         restore_rules(pin, rules_file=rf)
