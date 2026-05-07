@@ -10,7 +10,7 @@
 
 # Выполнить выбранный плагин Skynet на одном сервере
 _skynet_run_plugin_on_server() {
-    local plugin="$1" name="$2" user="$3" ip="$4" port="$5" key_path="$6" sudo_pass="$7"
+    local plugin="$1" name="$2" user="$3" ip="$4" port="$5" key_path="$6" sudo_pass="${7:-}"
     printf "\n"; warn "--- Сервер: $name ---"
     # Лечим ключ хоста на случай, если сервер был переустановлен
     _skynet_heal_host_key "$ip" "$port"
@@ -35,7 +35,7 @@ _skynet_run_plugin_on_server() {
 
 # Запуск плагина Skynet на ОДНОМ сервере с дополнительными переменными окружения
 _skynet_run_plugin_on_server_with_env() {
-    local plugin="$1" env_vars="$2" name="$3" user="$4" ip="$5" port="$6" key_path="$7" sudo_pass="$8"
+    local plugin="$1" env_vars="$2" name="$3" user="$4" ip="$5" port="$6" key_path="$7" sudo_pass="${8:-}"
     printf "\n"; warn "--- Сервер: $name ---"
     # Лечим ключ хоста на случай, если сервер был переустановлен
     _skynet_heal_host_key "$ip" "$port"
@@ -185,7 +185,7 @@ _run_fleet_command() {
             echo ""
             printf_info "Доступные сервера:"
             while IFS='|' read -r name user ip port key_path sudo_pass; do
-                servers[$idx]="$name|$user|$ip|$port|$key_path"
+                servers[$idx]="$name|$user|$ip|$port|$key_path|$sudo_pass"
                 printf "   [%d] %s (%s@%s:%s)\n" "$idx" "$name" "$user" "$ip" "$port"
                 ((idx++))
             done < "$FLEET_DATABASE_FILE"
@@ -193,10 +193,10 @@ _run_fleet_command() {
             local s_choice
             s_choice=$(ask_number_in_range "Номер сервера: " 1 "$((idx-1))" "") || continue
             if [[ -n "${servers[$s_choice]:-}" ]]; then
-                IFS='|' read -r name user ip port key_path <<< "${servers[$s_choice]}"
+                IFS='|' read -r name user ip port key_path sudo_pass <<< "${servers[$s_choice]}"
                 printf_warning "Выполняю '${selected_plugin##*/}' на сервере '$name'."
                 if ask_yes_no "Начать? (y/n): " "n"; then
-                    _skynet_run_plugin_on_server "$selected_plugin" "$name" "$user" "$ip" "$port" "$key_path"
+                    _skynet_run_plugin_on_server "$selected_plugin" "$name" "$user" "$ip" "$port" "$key_path" "$sudo_pass"
                     printf_ok "Команда выполнена."; wait_for_enter
                 fi
             fi
@@ -204,7 +204,7 @@ _run_fleet_command() {
             printf_warning "Выполняю '${selected_plugin##*/}' на ВСЁМ флоте. Это может занять время."
             if ask_yes_no "Начать? (y/n): " "n"; then
                 while IFS='|' read -r name user ip port key_path sudo_pass; do
-                    _skynet_run_plugin_on_server "$selected_plugin" "$name" "$user" "$ip" "$port" "$key_path"
+                    _skynet_run_plugin_on_server "$selected_plugin" "$name" "$user" "$ip" "$port" "$key_path" "$sudo_pass"
                 done < "$FLEET_DATABASE_FILE"
                 printf_ok "Команда выполнена на всём флоте."; wait_for_enter
             fi

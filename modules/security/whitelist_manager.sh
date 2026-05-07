@@ -213,7 +213,7 @@ _gwl_sync_shaper() {
 
     # Синхронизируем BPF-карту, если движок активен
     if [[ -d "$pin_dir" ]]; then
-        python3 "$ctrl_py" --pin-dir "$pin_dir" whitelist-sync --file "$GLOBAL_WHITELIST_FILE" 2>/dev/null || true
+        python3 "$ctrl_py" --pin-dir "$pin_dir" whitelist-sync --file "${shaper_config_dir}/whitelist.txt" "$GLOBAL_WHITELIST_FILE" 2>/dev/null || true
         debug_log "GWL_SYNC: eBPF whitelist_map обновлена."
     else
         debug_log "GWL_SYNC: eBPF pin_dir не существует (движок не запущен), пропуск."
@@ -263,7 +263,16 @@ show_global_whitelist_menu() {
         clear
         enable_graceful_ctrlc
         menu_header "🌍 Глобальный Белый Список"
-        printf_description "Единый whitelist для ВСЕХ модулей защиты."
+        
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}🌍 Глобальный Белый Список${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Единый список доверенных IP-адресов."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} IP добавляются в исключения (bypass) для"
+        echo -e "  ${C_CYAN}║${C_RESET}  всех подсистем защиты: eBPF Шейпера, Fail2Ban, Anti-DDoS,"
+        echo -e "  ${C_CYAN}║${C_RESET}  UFW и Geo-Block."
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
 
         print_separator
         info "Файл: ${C_CYAN}${GLOBAL_WHITELIST_FILE}${C_RESET}"

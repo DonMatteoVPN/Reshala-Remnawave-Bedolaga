@@ -218,27 +218,119 @@ _calculate_vpn_capacity() {
         echo "$hw_limit (Упор в $hw_reason)"
     fi
 }
-_ensure_speedtest_ok() { if command -v speedtest &>/dev/null && [[ "$(speedtest --version 2>/dev/null)" == *"Ookla"* ]]; then return 0; fi; info "Готовлю систему к установке Speedtest..."; ensure_package "curl" "gnupg" "apt-transport-https" "ca-certificates"; info "Пробую установить Speedtest (метод 1: репозиторий)..."; curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | run_cmd bash >/dev/null 2>&1; run_cmd apt-get update -qq >/dev/null 2>&1; if run_cmd apt-get install -y speedtest >/dev/null 2>&1; then ok "Установка через репозиторий прошла успешно."; return 0; fi; warn "Метод 1 не сработал. Удаляю битый репозиторий и пробую метод 2: прямая загрузка..."; rm -f /etc/apt/sources.list.d/ookla_speedtest-cli.list /etc/apt/sources.list.d/ookla_speedtest-cli.list.save; local arch; arch=$(uname -m); local url=""; case "$arch" in x86_64) url="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz" ;; aarch64) url="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-aarch64.tgz" ;; *) err "Неизвестная архитектура: $arch."; return 1;; esac; info "Качаю архив для $arch..."; if ! run_cmd curl -sL "$url" -o /tmp/speedtest.tgz; then err "Не удалось скачать архив."; return 1; fi; info "Распаковываю и устанавливаю..."; run_cmd tar -xzf /tmp/speedtest.tgz -C /tmp; run_cmd mv /tmp/speedtest /usr/local/bin/; run_cmd chmod +x /usr/local/bin/speedtest; run_cmd rm -f /tmp/speedtest.tgz /tmp/speedtest.md /tmp/speedtest.5; if command -v speedtest &>/dev/null; then ok "Установка через бинарник прошла успешно."; return 0; else err "Запасной метод тоже не сработал."; return 1; fi; }
-_run_speedtest() {
-    clear
-    menu_header "🚀 Тест скорости канала"
-    if ! _ensure_speedtest_ok; then wait_for_enter; return; fi
-    info "Используем универсальный тест Ookla с автовыбором сервера."
-    printf_critical_warning "РУКИ УБРАЛ ОТ КЛАВИАТУРЫ! Идёт замер..."
-    printf_warning "Так...Так, так, ага.. прикидываем хуй к носу..."
-    local json_output; json_output=$(speedtest --accept-license --accept-gdpr -f json 2>/dev/null)
-    if [[ -n "$json_output" ]] && echo "$json_output" | jq -e . >/dev/null 2>&1; then
-        local ping; ping=$(echo "$json_output" | jq -r '.ping.latency')
-        local dl_bytes; dl_bytes=$(echo "$json_output" | jq -r '.download.bandwidth')
-        local ul_bytes; ul_bytes=$(echo "$json_output" | jq -r '.upload.bandwidth')
-        local url; url=$(echo "$json_output" | jq -r '.result.url')
-        local dl_mbps; dl_mbps=$(awk "BEGIN {printf \"%.2f\", $dl_bytes * 8 / 1000000}")
-        local ul_mbps; ul_mbps=$(awk "BEGIN {printf \"%.2f\", $ul_bytes * 8 / 1000000}")
-        _process_and_display_speed_results "$dl_mbps" "$ul_mbps" "$ping" "$url"
-    else
-        err "Ошибка: Speedtest вернул пустоту или некорректный JSON."
+_ensure_speedtest_ok() { 
+    if command -v speedtest &>/dev/null && [[ "$(speedtest --version 2>/dev/null)" == *"Ookla"* ]]; then 
+        return 0; 
+    fi; 
+    
+    info "Готовлю систему к установке Speedtest (прямая загрузка)..."
+    ensure_package "curl" "ca-certificates" "tar"
+    
+    # Полностью вырезаем старые битые репозитории Ookla, если они остались от прошлых попыток
+    rm -f /etc/apt/sources.list.d/ookla_speedtest-cli.list*
+    
+    local arch; arch=$(uname -m)
+    local url1=""
+    local url2=""
+    case "$arch" in 
+        x86_64) 
+            url1="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz" 
+            url2="https://dl.lamp.sh/files/ookla-speedtest-1.2.0-linux-x86_64.tgz"
+            ;; 
+        aarch64) 
+            url1="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-aarch64.tgz" 
+            url2="https://dl.lamp.sh/files/ookla-speedtest-1.2.0-linux-aarch64.tgz"
+            ;; 
+        *) err "Неизвестная архитектура: $arch."; return 1;; 
+    esac
+    
+    info "Качаю официальный бинарник для $arch..."
+    
+    # Сначала пробуем офф сайт, если он заблокирован (например в РФ) - используем резервное зеркало (lamp.sh)
+    if ! curl -sL "$url1" -o /tmp/speedtest.tgz; then 
+        warn "Официальный сайт недоступен. Пробую резервное зеркало (lamp.sh)..."
+        if ! curl -sL "$url2" -o /tmp/speedtest.tgz; then
+            err "Не удалось скачать архив ни с одного из зеркал."
+            return 1
+        fi
     fi
-    wait_for_enter
+    
+    info "Распаковываю и устанавливаю..."
+    tar -xzf /tmp/speedtest.tgz -C /tmp
+    mv /tmp/speedtest /usr/local/bin/
+    chmod +x /usr/local/bin/speedtest
+    rm -f /tmp/speedtest.tgz /tmp/speedtest.md /tmp/speedtest.5
+    
+    if command -v speedtest &>/dev/null; then 
+        ok "Speedtest успешно установлен."
+        return 0
+    else 
+        err "Ошибка при установке бинарника."
+        return 1
+    fi
+}
+
+_run_speedtest() {
+    enable_graceful_ctrlc
+    while true; do
+        clear
+        menu_header "🚀 Центр тестирования сети"
+        printf_description "Интеллектуальный выбор тестовых серверов."
+        echo ""
+        
+        printf_menu_option "1" "🏎️  Умный замер для Дашборда (Ookla)"
+        printf_description "     └ Автоматически выбирает ближайший сервер, считает VPN-вместимость."
+        
+        echo -e "\n  ${C_CYAN}🌍 Зарубежные провайдеры (Global):${C_RESET}"
+        printf_menu_option "2" "Классический Bench.sh (Диск + Сеть по миру)"
+        printf_menu_option "3" "speed.tlab.pw (Оптимизирован для Европы)"
+        
+        echo -e "\n  ${C_CYAN}🇷🇺 Российские провайдеры (RU/CIS):${C_RESET}"
+        printf_menu_option "4" "bench.gig.ovh (Российские локации)"
+        printf_menu_option "5" "bench.tlab.pw (СНГ локации)"
+        
+        echo ""
+        printf_menu_option "b" "🔙 Назад"
+        echo ""
+        
+        local choice
+        choice=$(safe_read "Твой выбор" "") || break
+        
+        case "$choice" in
+            1)
+                clear
+                menu_header "🏎️ Умный замер для Дашборда"
+                if ! _ensure_speedtest_ok; then wait_for_enter; continue; fi
+                info "Используем универсальный тест Ookla с автовыбором сервера."
+                printf_critical_warning "РУКИ УБРАЛ ОТ КЛАВИАТУРЫ! Идёт замер..."
+                printf_warning "Так...Так, так, ага.. прикидываем хуй к носу..."
+                local json_output; json_output=$(speedtest --accept-license --accept-gdpr -f json 2>/dev/null)
+                if [[ -n "$json_output" ]] && echo "$json_output" | jq -e . >/dev/null 2>&1; then
+                    local ping; ping=$(echo "$json_output" | jq -r '.ping.latency')
+                    local dl_bytes; dl_bytes=$(echo "$json_output" | jq -r '.download.bandwidth')
+                    local ul_bytes; ul_bytes=$(echo "$json_output" | jq -r '.upload.bandwidth')
+                    local url; url=$(echo "$json_output" | jq -r '.result.url')
+                    local dl_mbps; dl_mbps=$(awk "BEGIN {printf \"%.2f\", $dl_bytes * 8 / 1000000}")
+                    local ul_mbps; ul_mbps=$(awk "BEGIN {printf \"%.2f\", $ul_bytes * 8 / 1000000}")
+                    _process_and_display_speed_results "$dl_mbps" "$ul_mbps" "$ping" "$url"
+                else
+                    err "Ошибка: Speedtest вернул пустоту или некорректный JSON."
+                fi
+                wait_for_enter
+                ;;
+            2)
+                clear; menu_header "🌍 Запуск Bench.sh"; echo "Загрузка скрипта..."; wget -qO- bench.sh | bash; wait_for_enter ;;
+            3)
+                clear; menu_header "🌍 Запуск speed.tlab.pw"; echo "Загрузка скрипта..."; wget -qO- speed.tlab.pw | bash; wait_for_enter ;;
+            4)
+                clear; menu_header "🇷🇺 Запуск bench.gig.ovh"; echo "Загрузка скрипта..."; wget -qO- bench.gig.ovh | bash; wait_for_enter ;;
+            5)
+                clear; menu_header "🇷🇺 Запуск bench.tlab.pw"; echo "Загрузка скрипта..."; wget -qO- bench.tlab.pw | bash; wait_for_enter ;;
+            [bB]) break ;;
+            *) err "Неверный выбор."; sleep 1 ;;
+        esac
+    done
+    disable_graceful_ctrlc
 }
 _set_dashboard_profile_menu() { enable_graceful_ctrlc; while true; do clear; menu_header "Профиль нагрузки дашборда"; printf_description "Настройка частоты обновления дашборда."; echo; local current; current=$(get_config_var "DASHBOARD_LOAD_PROFILE" "normal"); local mark_normal=" "; local mark_light=" "; local mark_ultra=" "; case "$current" in normal) mark_normal="*";; light) mark_light="*";; ultra_light) mark_ultra="*";; esac; printf_menu_option "1" "NORMAL ($mark_normal)"; printf_description "     - Стандартный режим (база: 25/60 сек)"; printf_menu_option "2" "LIGHT ($mark_light)"; printf_description "     - Реже обновление (x2, ~50/120 сек)"; printf_menu_option "3" "ULTRA_LIGHT ($mark_ultra)"; printf_description "     - Минимальная нагрузка (x4, ~100/240 сек)"; echo ""; printf_menu_option "b" "Назад"; echo "------------------------------------------------------"; local choice; choice=$(safe_read "Твой выбор: " "") || break; case "$choice" in 1) set_config_var "DASHBOARD_LOAD_PROFILE" "normal"; ok "Профиль дашборда: NORMAL."; sleep 1;; 2) set_config_var "DASHBOARD_LOAD_PROFILE" "light"; ok "Профиль дашборда: LIGHT."; sleep 1;; 3) set_config_var "DASHBOARD_LOAD_PROFILE" "ultra_light"; ok "Профиль дашборда: ULTRA_LIGHT."; sleep 1;; [bB]) break;; *) err "Нет такого пункта.";; esac; done; disable_graceful_ctrlc; }
 

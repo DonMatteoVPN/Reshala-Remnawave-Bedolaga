@@ -18,7 +18,16 @@ show_ssh_ports_menu() {
         clear
         enable_graceful_ctrlc
         menu_header "🔑 Управление портами SSH"
-        printf_description "Добавление/удаление портов с авто-обновлением firewall."
+        
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}🔑 Управление портами SSH${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Менеджер портов для удаленного доступа (SSH)."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} Позволяет безопасно менять стандартный порт"
+        echo -e "  ${C_CYAN}║${C_RESET}  на нестандартный, автоматически открывая его в Firewall"
+        echo -e "  ${C_CYAN}║${C_RESET}  и обновляя настройки Fail2Ban (без потери доступа)."
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
 
         _ssh_show_current_ports
 

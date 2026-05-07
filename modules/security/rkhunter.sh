@@ -14,7 +14,15 @@ show_rkhunter_menu() {
         clear
         enable_graceful_ctrlc
         menu_header "🔍 Сканер руткитов"
-        printf_description "Поиск вредоносного ПО с помощью rkhunter"
+        
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}🔍 Сканер руткитов${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Сканер вредоносного ПО (Rootkit Hunter)."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} Ищет скрытые бэкдоры, измененные системные"
+        echo -e "  ${C_CYAN}║${C_RESET}  файлы и подозрительные порты. Умеет работать по расписанию."
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
 
         _rkh_check_status
         

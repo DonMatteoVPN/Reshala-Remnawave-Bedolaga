@@ -15,6 +15,16 @@ show_full_security_status() {
 
     menu_header "📊 Полный статус защиты"
     
+    echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}📊 Полный статус защиты${C_RESET}"
+    echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Сводная панель всех систем безопасности."
+    echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} В реальном времени собирает и отображает"
+    echo -e "  ${C_CYAN}║${C_RESET}  состояние SSH, Firewall, Fail2Ban, Geo-Block, Белого"
+    echo -e "  ${C_CYAN}║${C_RESET}  Списка и сканера руткитов в едином окне."
+    echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+    echo ""
+    
     # --- SSH ---
     print_section_title "SSH"
     local ssh_config="/etc/ssh/sshd_config"

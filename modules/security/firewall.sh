@@ -26,7 +26,16 @@ show_firewall_menu() {
         clear
         enable_graceful_ctrlc
         menu_header "🔥 Firewall (UFW)"
-        printf_description "Управление правилами межсетевого экрана"
+        
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}🔥 Firewall (UFW)${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Межсетевой экран для контроля доступа к портам."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} Блокирует все несанкционированные входящие"
+        echo -e "  ${C_CYAN}║${C_RESET}  подключения и защищает от базовых DDoS-атак"
+        echo -e "  ${C_CYAN}║${C_RESET}  (CONN/RATE лимиты) через before.rules."
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
 
         _firewall_check_status
         

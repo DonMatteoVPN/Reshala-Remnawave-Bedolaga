@@ -55,7 +55,16 @@ show_geoblock_menu() {
         clear
         enable_graceful_ctrlc
         menu_header "🌐 Geo-Block (Блокировка стран)"
-        printf_description "Блокировка входящего трафика по странам."
+        
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}🌐 Geo-Block (Блокировка стран)${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Блокировщик трафика по странам."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} Загружает списки IP-адресов выбранных стран"
+        echo -e "  ${C_CYAN}║${C_RESET}  и блокирует их через ipset и UFW, отсекая \"мусорный\""
+        echo -e "  ${C_CYAN}║${C_RESET}  входящий трафик из нецелевых регионов."
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
 
         _geo_show_status
 

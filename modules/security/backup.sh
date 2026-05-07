@@ -16,7 +16,15 @@ show_backup_menu() {
         clear
         enable_graceful_ctrlc
         menu_header "💾 Бэкап и Восстановление"
-        printf_description "Резервное копирование конфигов безопасности"
+        
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}💾 Бэкап и Восстановление${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Система резервного копирования модуля защиты."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} Сохраняет правила UFW, настройки SSH, списки"
+        echo -e "  ${C_CYAN}║${C_RESET}  Fail2Ban и параметры ядра в архив. Позволяет откатить систему."
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
 
         echo ""
         printf_menu_option "1" "Создать бэкап"

@@ -751,7 +751,7 @@ ExecStartPre=/bin/bash -c '\
 
 # === ВОССТАНОВЛЕНИЕ ПРАВИЛ И БЕЛОГО СПИСКА ===
 ExecStart=${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} --rules-file ${TL_CONFIG_DIR}/rules.json restore
-ExecStartPost=-${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} whitelist-sync --file ${TL_CONFIG_DIR}/whitelist.txt
+ExecStartPost=-${python_path} ${TL_CTRL_PY_PATH} --pin-dir ${PIN_MAPS} whitelist-sync --file ${TL_CONFIG_DIR}/whitelist.txt /etc/reshala/global-whitelist.txt
 
 # === ОСТАНОВКА ===
 ExecStop=-/bin/bash -c "${rm_path} -rf ${TL_BPF_PIN_DIR}/*"
@@ -850,7 +850,7 @@ _tl_edit_whitelist() {
                 
                 info "Синхронизирую eBPF карты..."
                 local sync_out
-                sync_out=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file" 2>&1)
+                sync_out=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file" "$global_file" 2>&1)
                 
                 if echo "$sync_out" | grep -q "whitelist_map не найден"; then
                     warn "Шейпер ещё не загружен в ядро. Нажми [7] для старта."
@@ -890,7 +890,7 @@ EOF
     echo
     info "Применяю изменения..."
     local sync_out
-    sync_out=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file" 2>&1)
+    sync_out=$(python3 "${TL_CTRL_PY_PATH}" --pin-dir "${TL_BPF_PIN_DIR}/maps" whitelist-sync --file "$whitelist_file" "$global_file" 2>&1)
     echo "$sync_out"
     
     if echo "$sync_out" | grep -q "whitelist_map не найден"; then
@@ -900,9 +900,37 @@ EOF
 }
 
 _tl_complete_cleanup_wizard() {
-    if ask_yes_no "Полностью удалить шейпер?"; then
-        _tl_cleanup_old_system; rm -rf "${TL_CONFIG_DIR}"; ok "Всё удалено.";
+    clear; menu_header "🧹 Полная очистка системы"
+    echo -e "  ${C_RED}ВНИМАНИЕ: Это действие удалит все правила и настройки шейпера!${C_RESET}"
+    echo
+    if ! ask_yes_no "Точно удалить шейпер?" "n"; then return; fi
+
+    local delete_wl="y"
+    if [[ -f "${TL_CONFIG_DIR}/whitelist.txt" ]]; then
+        echo
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}🛡️ ОБНАРУЖЕН БЕЛЫЙ СПИСОК (WHITELIST)${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  У вас настроен локальный белый список IP-адресов."
+        echo -e "  ${C_CYAN}║${C_RESET}  Хотите ли вы УДАЛИТЬ его вместе с остальными настройками?"
+        echo -e "  ${C_CYAN}║${C_RESET}  Если ответите [n], список будет сохранен для будущего."
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo
+        if ! ask_yes_no "Удалить белый список?" "n"; then
+            delete_wl="n"
+        fi
     fi
+
+    _tl_cleanup_old_system
+
+    if [[ "$delete_wl" == "y" ]]; then
+        rm -rf "${TL_CONFIG_DIR}"
+    else
+        # Удаляем все файлы, кроме белых списков
+        find "${TL_CONFIG_DIR}" -mindepth 1 -maxdepth 1 ! -name 'whitelist.txt' ! -name 'global-whitelist.txt' -exec rm -rf {} + 2>/dev/null || true
+    fi
+
+    ok "Очистка успешно завершена."
 }
 
 _tl_view_service_log() {

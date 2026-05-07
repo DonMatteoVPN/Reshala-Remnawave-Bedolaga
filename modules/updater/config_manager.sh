@@ -50,21 +50,48 @@ detect_service_info() {
     if [ ! -f "$compose_file" ]; then compose_file="$target_dir/docker-compose.yaml"; fi
     
     local strategy="PULL_RESTART"
-    local label="📦 НЕИЗВЕСТНЫЙ СЕРВИС"
+    local label="📦 СТОРОННИЙ СЕРВИС"
     
     if [ -f "$compose_file" ]; then
+        local dir_name
+        dir_name=$(basename "$target_dir")
+        
+        # 1. Известные модули Reshala / Remnawave
         if grep -q "image:.*remnawave/node" "$compose_file"; then
             label="🚜 РАБОТЯГА (NODE)"
+            strategy="PULL_RESTART"
         elif grep -q "image:.*remnawave/backend" "$compose_file"; then
             label="👑 ПАХАН (PANEL)"
-        elif grep -q -i "bedolaga" "$compose_file" || grep -q -i "bot" "$compose_file"; then
-            label="🤖 BEDOLAGA / BOT"
-            strategy="BUILD_RESTART"
-        elif grep -q "nginx" "$compose_file"; then
-            label="🌐 NGINX WEB"
-        elif grep -q "certwarden" "$compose_file"; then
+            strategy="PULL_RESTART"
+        elif grep -q -i "certwarden" "$compose_file"; then
             label="🔐 CERTWARDEN"
-        elif grep -q "build:" "$compose_file"; then
+            strategy="PULL_RESTART"
+        elif [[ "$dir_name" == *"cloudflare-nodes"* ]]; then
+            label="☁️ CLOUDFLARE NODES"
+            strategy="PULL_RESTART"
+        # 2. Инфраструктура (БД и Nginx)
+        elif grep -q -E -i "image:.*(mysql|postgres|mariadb|redis|mongodb)" "$compose_file"; then
+            label="🗄️ БАЗА ДАННЫХ"
+            strategy="PULL_RESTART"
+        elif [[ "$dir_name" == *"nginx"* ]] || grep -q -i "image:.*nginx" "$compose_file"; then
+            label="🌐 NGINX WEB"
+            strategy="PULL_RESTART"
+        # 3. Сторонние панели VPN
+        elif [[ "${dir_name,,}" == *"3x-ui"* ]] || grep -q -i "3x-ui" "$compose_file"; then
+            label="🛡️ 3X-UI ПАНЕЛЬ"
+            strategy="PULL_RESTART"
+        elif [[ "${dir_name,,}" == *"marzban"* ]] || grep -q -i "marzban" "$compose_file"; then
+            label="🛡️ MARZBAN ПАНЕЛЬ"
+            strategy="PULL_RESTART"
+        # 4. Боты и самописный софт
+        elif grep -q -E -i "bedolaga" "$compose_file"; then
+            label="🤖 BEDOLAGA BOT"
+            strategy="BUILD_RESTART"
+        elif grep -q -E -i "^ *(container_name|image):.*bot" "$compose_file" || [[ "${dir_name,,}" == *"bot"* ]]; then
+            label="🤖 ПРОСТОЙ БОТ"
+            strategy="PULL_RESTART"
+        # 5. Кастомные сборки (там, где явно указан build:)
+        elif grep -q -E -i "^ *build:" "$compose_file"; then
             label="🛠️ КАСТОМНАЯ СБОРКА"
             strategy="BUILD_RESTART"
         fi
@@ -138,7 +165,7 @@ scan_system_for_services() {
         printf_ok "Все сервисы добавлены в конфиг!"
     elif [[ "$choice" == "2" ]]; then
         for i in "${!detected_paths[@]}"; do
-            if ask_yes_no "Добавить ${C_CYAN}${detected_paths[$i]}${C_RESET} [${detected_labels[$i]}]?" "y"; then
+            if ask_yes_no "Добавить ${detected_paths[$i]} [${detected_labels[$i]}]?" "y"; then
                 UPDATER_PATHS+=("${detected_paths[$i]}")
                 UPDATER_STRATEGIES+=("${detected_strats[$i]}")
                 UPDATER_LABELS+=("${detected_labels[$i]}")

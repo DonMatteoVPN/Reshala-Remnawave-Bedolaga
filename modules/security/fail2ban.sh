@@ -14,6 +14,16 @@ show_fail2ban_menu() {
         clear
         enable_graceful_ctrlc
         menu_header "🤖 Управление Fail2Ban"
+        
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}🤖 Управление Fail2Ban${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Автоматическая защита от перебора паролей."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} Сканирует логи сервисов (SSH, Nginx) и"
+        echo -e "  ${C_CYAN}║${C_RESET}  автоматически банит IP-адреса злоумышленников в Firewall"
+        echo -e "  ${C_CYAN}║${C_RESET}  при превышении лимита неудачных попыток входа."
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
 
         _f2b_check_status
         

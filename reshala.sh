@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v3.010 - РЕФАКТОРИНГ МЕНЮ        == #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v3.011 - РЕФАКТОРИНГ МЕНЮ        == #
 # ============================================================ #
 #
 # Точка входа. Этот скрипт — прораб. Он только отдаёт команды
@@ -22,7 +22,7 @@ while [ -h "$SOURCE" ]; do
 done
 export SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 
-readonly VERSION="v3.010"
+readonly VERSION="v3.011"
 
 # ============================================================ #
 #              ПОДГОТОВКА И ЗАГРУЗКА КОМПОНЕНТОВ               #
@@ -98,8 +98,9 @@ _printf_link() {
     local text="$1"
     local url="$2"
     local color="${3:-$C_CYAN}"
-    # Выводим [Текст] и рядом саму ссылку явно, чтобы уж точно работало
-    printf "%b%s%b %b(%s)%b\n" "$color" "$text" "$C_RESET" "$C_GRAY" "$url" "$C_RESET"
+    # Используем OSC 8 для создания настоящей кликабельной гиперссылки, 
+    # а рядом оставляем саму ссылку серым текстом для визуальной ясности.
+    printf "  ${C_MAGENTA}║${C_RESET}     %b\e]8;;%s\e\\%s\e]8;;\e\\%b %b(%s)%b\n" "$color" "$url" "$text" "$C_RESET" "$C_GRAY" "$url" "$C_RESET"
 }
 
 # Страница поддержки разработчика
@@ -135,52 +136,63 @@ show_support_page() {
     echo
     echo -e "           ${C_BOLD}${C_WHITE}от ${C_YELLOW}DonMatteo${C_WHITE} с любовью блять!${C_RESET}"
     echo
-    print_separator "═" 64 "${C_CYAN}"
-    echo -e "  ${C_YELLOW}🚀 ПОДДЕРЖИ ПРОЕКТ — ВДОХНОВИ НА НОВЫЕ ФИЧИ!${C_RESET}"
-    print_separator "─" 64 "${C_GRAY}"
-    echo
-
+    
+    echo -e "  ${C_MAGENTA}╔═════════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_YELLOW}🚀 ПОДДЕРЖИ ПРОЕКТ — ВДОХНОВИ НА НОВЫЕ ФИЧИ!${C_RESET}"
+    echo -e "  ${C_MAGENTA}╠═════════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo -e "  ${C_MAGENTA}║${C_RESET}"
+    
     if [[ "$SHOW_USDT" == "1" ]]; then
-        echo -e "  ${C_GREEN}💎 USDT (TRC20):${C_RESET}"
-        echo -e "     ${C_WHITE}${DON_USDT_ADDR}${C_RESET}"; echo
+        echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_GREEN}💎 USDT (TRC20):${C_RESET}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}     ${C_WHITE}${DON_USDT_ADDR}${C_RESET}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}"
     fi
 
     if [[ "$SHOW_BTC" == "1" ]]; then
-        echo -e "  ${C_GREEN}💰 Bitcoin (BTC):${C_RESET}"
-        echo -e "     ${C_WHITE}${DON_BTC_ADDR}${C_RESET}"; echo
+        echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_GREEN}💰 Bitcoin (BTC):${C_RESET}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}     ${C_WHITE}${DON_BTC_ADDR}${C_RESET}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}"
     fi
 
     if [[ "$SHOW_TON" == "1" ]]; then
-        echo -e "  ${C_GREEN}💎 TON (Kripta):${C_RESET}"
-        echo -e "     ${C_WHITE}${DON_TON_ADDR}${C_RESET}"; echo
+        echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_GREEN}💎 TON (Kripta):${C_RESET}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}     ${C_WHITE}${DON_TON_ADDR}${C_RESET}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}"
     fi
 
     if [[ "$SHOW_PLATEGA" == "1" ]]; then
-        echo -e "  ${C_GREEN}💳 Platega (Bank Card):${C_RESET}"
-        _printf_link "     🚀 Донейт через Platega" "${DON_PLATEGA_URL}" "${C_CYAN}"; echo
+        echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_GREEN}💳 Platega (Bank Card):${C_RESET}"
+        _printf_link "🚀 Донейт через Platega" "${DON_PLATEGA_URL}" "${C_CYAN}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}"
     fi
 
     if [[ "$SHOW_TRIBUT" == "1" ]]; then
-        echo -e "  ${C_GREEN}📱 Донат через Tribut (Telegram):${C_RESET}"
-        _printf_link "     💎 Кнопка доната Tribut" "${DON_TRIBUT_URL}" "${C_CYAN}"; echo
+        echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_GREEN}📱 Донат через Tribut (Telegram):${C_RESET}"
+        _printf_link "💎 Кнопка доната Tribut" "${DON_TRIBUT_URL}" "${C_CYAN}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}"
     fi
 
     if [[ "$SHOW_GROUP" == "1" || "$SHOW_SITE" == "1" ]]; then
-        print_separator "─" 64 "${C_GRAY}"
-        echo -e "  ${C_YELLOW}🔗 ПОЛЕЗНЫЕ ССЫЛКИ:${C_RESET}"; echo
+        echo -e "  ${C_MAGENTA}╠═════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_YELLOW}🔗 ПОЛЕЗНЫЕ ССЫЛКИ:${C_RESET}"
+        echo -e "  ${C_MAGENTA}╠═════════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo -e "  ${C_MAGENTA}║${C_RESET}"
         
         if [[ "$SHOW_GROUP" == "1" ]]; then
-            echo -e "  ${C_GREEN}🚀 Группа ТГ Решалы:${C_RESET}"
-            _printf_link "     ✈️ Вступить в сообщество" "${LINK_GROUP_URL}" "${C_CYAN}"; echo
+            echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_GREEN}🚀 Группа ТГ Решалы:${C_RESET}"
+            _printf_link "✈️ Вступить в сообщество" "${LINK_GROUP_URL}" "${C_CYAN}"
+            echo -e "  ${C_MAGENTA}║${C_RESET}"
         fi
 
         if [[ "$SHOW_SITE" == "1" ]]; then
-            echo -e "  ${C_GREEN}🌐 Официальный Репозиторий:${C_RESET}"
-            _printf_link "     🌍 Перейти на GitHub" "${LINK_SITE_URL}" "${C_CYAN}"; echo
+            echo -e "  ${C_MAGENTA}║${C_RESET}  ${C_GREEN}🌐 Официальный Репозиторий:${C_RESET}"
+            _printf_link "🌍 Перейти на GitHub" "${LINK_SITE_URL}" "${C_CYAN}"
+            echo -e "  ${C_MAGENTA}║${C_RESET}"
         fi
     fi
 
-    print_separator "═" 64 "${C_CYAN}"
+    echo -e "  ${C_MAGENTA}╚═════════════════════════════════════════════════════════════════${C_RESET}"
+    echo
     echo -e "  ${C_GRAY}Для возврата в меню нажми [Enter]${C_RESET}"
     read -r _
 }
@@ -247,22 +259,51 @@ show_main_menu() {
                     if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
                         if [[ -n "${LATEST_COMMIT_MESSAGE:-}" ]]; then
                             clear
-                            local width=68
-                            local line_top=$(printf "%.0s═" $(seq 1 $width))
-                            local line_mid=$(printf "%.0s─" $(seq 1 $width))
-                            
-                            echo -e "  ${C_CYAN}${line_top}${C_RESET}"
-                            echo -e "  ${C_YELLOW}⚡ ЧТО НОВОГО В ЭТОМ ОБНОВЛЕНИИ?${C_RESET} (${LATEST_VERSION})"
-                            echo -e "  ${C_CYAN}${line_mid}${C_RESET}"
-                            echo
-                            # Динамический перенос слов строго в ширину линеек
-                            echo "$LATEST_COMMIT_MESSAGE" | fold -s -w "$width" | while read -r line; do
-                                [[ -z "${line// /}" ]] && continue
-                                echo -e "  ${C_WHITE}${line}${C_RESET}"
-                            done
-                            echo
-                            echo -e "  ${C_CYAN}${line_top}${C_RESET}"
-                            echo
+                            local W=66  # inner text width
+                            local BOX_W=68
+                            local _line_eq; _line_eq=$(printf "%.0s═" $(seq 1 $BOX_W))
+                            local _line_dsh; _line_dsh=$(printf "%.0s─" $(seq 1 $BOX_W))
+
+                            echo ""
+                            echo -e "  ${C_CYAN}╔${_line_eq}╗${C_RESET}"
+                            printf "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}${C_BOLD}⚡  ЧТО НОВОГО В ОБНОВЛЕНИИ %-28s${C_RESET}${C_CYAN}║${C_RESET}\n" "${LATEST_VERSION}"
+                            echo -e "  ${C_CYAN}╠${_line_dsh}╣${C_RESET}"
+                            echo -e "  ${C_CYAN}║${C_RESET}"
+
+                            # ── Умный рендерер строк коммита ──────────────────
+                            while IFS= read -r raw_line; do
+                                # Пустая строка → красивый отступ
+                                if [[ -z "${raw_line// /}" ]]; then
+                                    echo -e "  ${C_CYAN}║${C_RESET}"
+                                    continue
+                                fi
+
+                                # Строка с bullet ├─ └─ → цветной пункт
+                                if [[ "$raw_line" =~ ^[[:space:]]*(├─|└─|[-*•]) ]]; then
+                                    # Убираем ведущие пробелы для чистого отступа
+                                    local stripped="${raw_line#"${raw_line%%[! ]*}"}"
+                                    printf "  ${C_CYAN}║${C_RESET}    ${C_GRAY}▸${C_RESET} ${C_WHITE}%s${C_RESET}\n" "${stripped#*─ }"
+                                    continue
+                                fi
+
+                                # Строка — заголовок секции (содержит эмодзи и двоеточие или заглавные)
+                                if [[ "$raw_line" =~ ^[[:space:]]*(🚀|🔧|🐛|✨|🛠|💡|⚡|🔒|🧹|📦|🗑️|♻️|🌐|💾|🎯|🆕|⚙️|🔥|✅|📋|🏎️) ]]; then
+                                    echo -e "  ${C_CYAN}║${C_RESET}  ${C_CYAN}${C_BOLD}${raw_line}${C_RESET}"
+                                    continue
+                                fi
+
+                                # Обычный длинный текст → перенос слов
+                                echo "$raw_line" | fold -s -w "$W" | while IFS= read -r wrapped; do
+                                    [[ -z "${wrapped// /}" ]] && continue
+                                    printf "  ${C_CYAN}║${C_RESET}  ${C_WHITE}%s${C_RESET}\n" "$wrapped"
+                                done
+
+                            done <<< "$LATEST_COMMIT_MESSAGE"
+                            # ─────────────────────────────────────────────────
+
+                            echo -e "  ${C_CYAN}║${C_RESET}"
+                            echo -e "  ${C_CYAN}╚${_line_eq}╝${C_RESET}"
+                            echo ""
                             echo -e "  👇 Нажми ${C_BOLD}[Enter]${C_RESET}, чтобы подтвердить и начать обновление..."
                             read -r _
                         fi
