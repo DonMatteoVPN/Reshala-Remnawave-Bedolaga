@@ -380,21 +380,41 @@ show() {
     fi
 
     # Remnawave / Нода / Бот (данные даёт state_scanner)
-    if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        print_key_value "Remnawave" "${C_GREEN}🔥 COMBO (Панель + Нода)${C_RESET}" "$min_label_width"
-        print_key_value "Версии" "P: ${panel_ver_pretty:-?} | N: ${node_ver_pretty:-?}" "$min_label_width"
-    elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        print_key_value "Remnawave" "${C_GREEN}Панель управления${C_RESET} (${panel_ver_pretty:-unknown})" "$min_label_width"
-    elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        print_key_value "Remnawave" "${C_GREEN}Боевая Нода${C_RESET} (${node_ver_pretty:-unknown})" "$min_label_width"
-    elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-        print_key_value "Remnawave" "${C_RED}НЕ НАЙДЕНО / СТОРОННИЙ СОФТ${C_RESET}" "$min_label_width"
-    else
-        print_key_value "Remnawave" "Не установлена" "$min_label_width"
-    fi
+    case "$SERVER_TYPE" in
+        "Панель и Нода")
+            print_key_value "Remnawave" "${C_GREEN}🔥 COMBO (Панель + Нода)${C_RESET}" "$min_label_width"
+            print_key_value "Версии" "P: ${panel_ver_pretty:-?} | N: ${node_ver_pretty:-?}" "$min_label_width"
+            ;;
+        "Панель, Нода и Sub-page")
+            print_key_value "Remnawave" "${C_GREEN}🔥 FULL STACK (Панель + Нода + Sub-page)${C_RESET}" "$min_label_width"
+            print_key_value "Версии" "P: ${panel_ver_pretty:-?} | N: ${node_ver_pretty:-?}" "$min_label_width"
+            ;;
+        "Панель + Sub-page")
+            print_key_value "Remnawave" "${C_GREEN}Панель + Sub-page${C_RESET} (${panel_ver_pretty:-unknown})" "$min_label_width"
+            ;;
+        "Панель")
+            print_key_value "Remnawave" "${C_GREEN}Панель управления${C_RESET} (${panel_ver_pretty:-unknown})" "$min_label_width"
+            ;;
+        "Нода")
+            print_key_value "Remnawave" "${C_GREEN}Боевая Нода${C_RESET} (${node_ver_pretty:-unknown})" "$min_label_width"
+            ;;
+        "Sub-page и Нода")
+            print_key_value "Remnawave" "${C_CYAN}Sub-page + Нода${C_RESET} (${panel_ver_pretty:-unknown})" "$min_label_width"
+            print_key_value "Версии" "Sub: ${panel_ver_pretty:-?} | N: ${node_ver_pretty:-?}" "$min_label_width"
+            ;;
+        "Sub-page подписки")
+            print_key_value "Remnawave" "${C_CYAN}Страница подписки (Sub-page)${C_RESET} (${panel_ver_pretty:-unknown})" "$min_label_width"
+            ;;
+        "Сервак не целка")
+            print_key_value "Remnawave" "${C_RED}НЕ НАЙДЕНО / СТОРОННИЙ СОФТ${C_RESET}" "$min_label_width"
+            ;;
+        *)
+            print_key_value "Remnawave" "Не установлена" "$min_label_width"
+            ;;
+    esac
 
     if [ "${BOT_DETECTED:-0}" -eq 1 ]; then
-        print_key_value "Bedalaga" "${C_CYAN}АКТИВЕН${C_RESET} (${bot_ver_pretty:-unknown})" "$min_label_width"
+        print_key_value "Bedolaga" "${C_CYAN}АКТИВЕН${C_RESET} (${bot_ver_pretty:-unknown})" "$min_label_width"
     fi
 
     if [[ "$WEB_SERVER" != "Не определён" ]]; then

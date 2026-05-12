@@ -36,8 +36,12 @@ net.core.netdev_max_backlog = 4096
 # --- IP Spoofing & Network Attack Protection ---
 net.ipv4.conf.all.accept_source_route = 0
 net.ipv4.conf.default.accept_source_route = 0
-net.ipv4.conf.all.rp_filter = 2
-net.ipv4.conf.default.rp_filter = 2
+# rp_filter=0: WireGuard/WARP-совместимый режим.
+# src_valid_mark обеспечивает защиту от спуфинга через mark-based route lookup.
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+# src_valid_mark=1: обязателен для WireGuard/WARP-туннелей.
+net.ipv4.conf.all.src_valid_mark = 1
 net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.default.accept_redirects = 0
 net.ipv4.conf.all.secure_redirects = 0

@@ -20,6 +20,7 @@ show_kernel_menu() {
         echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Что это:${C_RESET} Глубокая настройка параметров ядра Linux."
         echo -e "  ${C_CYAN}║${C_RESET}  ${C_WHITE}Как работает:${C_RESET} Защищает от TCP SYN Flood атак, спуфинга,"
         echo -e "  ${C_CYAN}║${C_RESET}  ICMP-атак и оптимизирует сеть, сохраняя совместимость с VPN."
+        echo -e "  ${C_CYAN}║${C_RESET}  ${C_YELLOW}⚠️  WARP/WireGuard совместимость:${C_RESET} src_valid_mark включён."
         echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
         echo ""
 
@@ -66,7 +67,8 @@ _kernel_check_status() {
         info "Ключевые параметры:"
         
         [[ "$syn_cookies" == "1" ]] && printf_description "  - SYN Cookies: ${C_GREEN}Включены${C_RESET}" || printf_description "  - SYN Cookies: ${C_RED}Отключены${C_RESET}"
-        [[ "$rp_filter" == "1" || "$rp_filter" == "2" ]] && printf_description "  - RP Filter (Anti-Spoofing): ${C_GREEN}Включен${C_RESET}" || printf_description "  - RP Filter (Anti-Spoofing): ${C_RED}Отключен${C_RESET}"
+        # rp_filter=0 — специально для совместимости с WireGuard/WARP (src_valid_mark покрывает защиту)
+        [[ "$rp_filter" == "0" ]] && printf_description "  - RP Filter: ${C_GREEN}WireGuard-режим (0, src_valid_mark=1)${C_RESET}" || printf_description "  - RP Filter: ${C_YELLOW}${rp_filter} (может блокировать WARP/WireGuard)${C_RESET}"
         [[ "$aslr" == "2" ]] && printf_description "  - ASLR (Address Space Randomization): ${C_GREEN}Полный${C_RESET}" || printf_description "  - ASLR (Address Space Randomization): ${C_YELLOW}Частичный или выкл${C_RESET}"
 
     else
@@ -111,8 +113,14 @@ net.core.netdev_max_backlog = 4096
 # --- IP Spoofing & Network Attack Protection ---
 net.ipv4.conf.all.accept_source_route = 0
 net.ipv4.conf.default.accept_source_route = 0
-net.ipv4.conf.all.rp_filter = 2
-net.ipv4.conf.default.rp_filter = 2
+# rp_filter=0: WireGuard/WARP-совместимый режим.
+# Защиту от спуфинга обеспечивает src_valid_mark (ниже) — ядро проверяет mark
+# при route lookup, что предотвращает подделку пакетов через wg-интерфейсы.
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+# src_valid_mark=1: обязателен для WireGuard/WARP — без него rp_filter
+# сбрасывает помеченные пакеты WireGuard при reverse-path проверке.
+net.ipv4.conf.all.src_valid_mark = 1
 net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.default.accept_redirects = 0
 net.ipv4.conf.all.secure_redirects = 0

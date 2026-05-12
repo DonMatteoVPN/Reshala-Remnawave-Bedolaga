@@ -3,6 +3,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlun
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import load_config
@@ -11,22 +12,6 @@ from app.proxy import forward_request
 from app.router_logic import match_route
 from app.url_utils import merge_query
 
-# ── Favicon: щит с галочкой, градиент cyan → violet на тёмном фоне ──
-_FAVICON_SVG = (
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-    '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">'
-    '<stop offset="0%" stop-color="#3cc8ff"/>'
-    '<stop offset="100%" stop-color="#7a7dff"/>'
-    '</linearGradient></defs>'
-    '<rect width="32" height="32" rx="8" fill="#0f1730"/>'
-    '<path d="M16 4 L26 8 L26 17 C26 22.5 21.5 27 16 28 C10.5 27 6 22.5 6 17 L6 8 Z"'
-    ' fill="url(#g)" opacity="0.9"/>'
-    '<path d="M16 8 L23 11 L23 17 C23 20.8 20 24 16 25 C12 24 9 20.8 9 17 L9 11 Z"'
-    ' fill="#0f1730" opacity="0.6"/>'
-    '<path d="M13.5 16.5 L15.5 18.5 L19 14.5" stroke="#3cc8ff"'
-    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>'
-    '</svg>'
-)
 
 
 def _build_target(base: str, path: str, query: str, preserve_path: bool, preserve_query: bool) -> str:
@@ -131,14 +116,13 @@ def create_app(config_path: str = "config/gateway.yml") -> FastAPI:
     async def health():
         return {"ok": True}
 
-    @app.get("/favicon.svg")
-    @app.get("/favicon.ico")
-    async def favicon():
-        return Response(
-            content=_FAVICON_SVG.encode("utf-8"),
-            media_type="image/svg+xml",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
+    # Раздаём статику (favicon, future assets) — до catch-all роута!
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+    # /favicon.ico → редирект на SVG (браузеры тоже делают GET /favicon.ico)
+    @app.api_route("/favicon.ico", methods=["GET", "HEAD"])
+    async def favicon_ico():
+        return RedirectResponse(url="/static/favicon.svg", status_code=301)
 
     @app.api_route("/docs", methods=["GET", "HEAD"])
     @app.api_route("/redoc", methods=["GET", "HEAD"])
