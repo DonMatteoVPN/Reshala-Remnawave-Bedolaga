@@ -16,6 +16,7 @@ PANEL_NODE_PATH=""
 BOT_DETECTED=0
 BOT_VERSION=""
 BOT_PATH=""
+SUBPAGE_VERSION=""
 WEB_SERVER="Не определён"
 
 # Флаг, чтобы не пересканировать Remnawave/бота на каждом кадре дашборда
@@ -165,6 +166,7 @@ scan_remnawave_state() {
     BOT_DETECTED=0
     BOT_VERSION=""
     BOT_PATH=""
+    SUBPAGE_VERSION=""
     WEB_SERVER="Не определён"
 
     local container_names

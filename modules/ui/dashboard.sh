@@ -379,7 +379,7 @@ show() {
         fi
     fi
     local sub_ver_pretty=""
-    if [[ -n "$SUBPAGE_VERSION" ]]; then
+    if [[ -n "${SUBPAGE_VERSION:-}" ]]; then
         if [[ "$SUBPAGE_VERSION" == latest* ]]; then
             sub_ver_pretty="$SUBPAGE_VERSION"
         else
