@@ -6,6 +6,8 @@
 
 **➡️ [`STYLE_GUIDE.md`](STYLE_GUIDE.md)**
 
+**➡️ [`MIGRATIONS.md`](MIGRATIONS.md)**
+
 Перед чтением этого гайда **настоятельно рекомендуется** ознакомиться со `STYLE_GUIDE.md`.
 
 ---

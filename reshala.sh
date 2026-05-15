@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v3.048 - РЕФАКТОРИНГ МЕНЮ        == #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v3.050 - РЕФАКТОРИНГ МЕНЮ        == #
 # ============================================================ #
 #
 # Точка входа. Этот скрипт — прораб. Он только отдаёт команды
@@ -26,7 +26,7 @@ export SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 # что приводит к "chdir: error: getcwd: cannot access parent directories"
 cd "$SCRIPT_DIR" 2>/dev/null || cd / || true
 
-readonly VERSION="v3.048"
+readonly VERSION="v3.050"
 
 # ============================================================ #
 #              ПОДГОТОВКА И ЗАГРУЗКА КОМПОНЕНТОВ               #
@@ -46,6 +46,11 @@ if [ -f "${SCRIPT_DIR}/modules/core/common.sh" ]; then
 else
     echo "[FATAL ERROR] Common tools module modules/core/common.sh not found."
     exit 1
+fi
+
+# Загружаем систему миграций
+if [ -f "${SCRIPT_DIR}/modules/utils/migrations.sh" ]; then
+    source "${SCRIPT_DIR}/modules/utils/migrations.sh"
 fi
 
 # Загружаем НОВЫЙ генератор меню
@@ -212,6 +217,14 @@ show_main_menu() {
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
             printf_critical_warning "ДОСТУПНО ОБНОВЛЕНИЕ! ${VERSION} -> ${LATEST_VERSION}"
         fi
+
+        # Проверка критических миграций (Professional Docker Fix и др.)
+        if command -v get_pending_migrations_count &>/dev/null; then
+            local pending_mig; pending_mig=$(get_pending_migrations_count)
+            if [[ $pending_mig -gt 0 ]]; then
+                printf_critical_warning "🔥 ЕСТЬ КРИТИЧЕСКИЕ ОБНОВЛЕНИЯ БЕЗОПАСНОСТИ ($pending_mig)!"
+            fi
+        fi
         
         printf "\n%s\n\n" "Чё делать будем, босс?"
         
@@ -223,6 +236,13 @@ show_main_menu() {
         # 3. Обрабатываем специальные, контекстно-зависимые пункты
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
             printf_menu_option "u" "‼️ ОБНОВИТЬ РЕШАЛУ ‼️" "${C_BOLD}${C_YELLOW}"
+        fi
+
+        # Пункт меню для миграций (динамический)
+        if command -v get_pending_migrations_count &>/dev/null; then
+            if [[ $(get_pending_migrations_count) -gt 0 ]]; then
+                printf_menu_option "m" "🚀 ПРИМЕНИТЬ КРИТИЧЕСКИЕ ПАТЧИ 🚀" "${C_BOLD}${C_RED}"
+            fi
         fi
         
         if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
@@ -259,6 +279,11 @@ show_main_menu() {
         else
             # Если действие не найдено в манифестах, проверяем специальные случаи
             case "$choice" in
+                m|M)
+                    if command -v show_critical_updates_wizard &>/dev/null; then
+                        show_critical_updates_wizard
+                    fi
+                    ;;
                 u|U)
                     if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
                         if [[ -n "${LATEST_COMMIT_MESSAGE:-}" ]]; then

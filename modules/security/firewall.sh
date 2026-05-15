@@ -392,9 +392,27 @@ _firewall_add_rule() {
                 return
             fi
 
-            if ask_yes_no "Дать полный доступ IP ${ip}?"; then
+            if ask_yes_no "Дать полный доступ IP ${ip} к серверу и Docker-контейнерам?"; then
+                # 1. Локальный UFW
                 run_cmd ufw allow from "$ip" comment "Manual Whitelist"
-                ok "IP ${ip} добавлен в whitelist."
+                
+                # 2. Docker Route (если фикс применен)
+                if grep -q "Reshala Docker UFW Fix" /etc/ufw/after.rules 2>/dev/null; then
+                    run_cmd ufw route allow from "$ip" comment "Docker Sync Whitelist" >/dev/null 2>&1 || true
+                fi
+                
+                # 3. Интеграция с Глобальным Белым Списком
+                if ask_yes_no "Добавить этот IP также в Глобальный Белый Список (для Fail2Ban и Geo-Block)?"; then
+                    if command -v global_whitelist_add_ip &>/dev/null; then
+                        global_whitelist_add_ip "$ip" "Added via Firewall Menu"
+                        ok "IP ${ip} добавлен в Глобальный Белый Список."
+                    else
+                        # Если функция не загружена, попробуем через файл напрямую или предложим зайти в меню
+                        warn "Модуль Глобального списка не загружен. Добавьте его через меню [w]."
+                    fi
+                fi
+                
+                ok "IP ${ip} добавлен в whitelist Firewall."
             fi
             ;;
         b|B)
