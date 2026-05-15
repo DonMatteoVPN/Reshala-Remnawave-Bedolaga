@@ -367,18 +367,22 @@ _firewall_add_rule() {
             if [[ -n "$ip" ]]; then
                 if ask_yes_no "Открыть порт ${port} только для IP ${ip}?"; then
                     run_cmd ufw allow from "$ip" to any port "$port" comment "Manual Rule"
-                    # Если фикс докера применен, добавляем и в route
+                    # Если фикс докера применен, добавляем и в route только если порт в докере
                     if grep -q "Reshala Docker UFW Fix" /etc/ufw/after.rules 2>/dev/null; then
-                        run_cmd ufw route allow from "$ip" to any port "$port" comment "Docker Sync" >/dev/null 2>&1 || true
+                        if docker ps --format "{{.Ports}}" 2>/dev/null | grep -oE "0.0.0.0:${port}" >/dev/null; then
+                            run_cmd ufw route allow from "$ip" to any port "$port" comment "Docker Sync" >/dev/null 2>&1 || true
+                        fi
                     fi
                     ok "Правило добавлено (включая Docker Route)."
                 fi
             else
                 if ask_yes_no "Открыть порт ${port} для всех?"; then
                     run_cmd ufw allow "$port" comment "Manual Rule"
-                    # Если фикс докера применен, добавляем и в route
+                    # Если фикс докера применен, добавляем и в route только если порт в докере
                     if grep -q "Reshala Docker UFW Fix" /etc/ufw/after.rules 2>/dev/null; then
-                        run_cmd ufw route allow "$port" comment "Docker Sync" >/dev/null 2>&1 || true
+                        if docker ps --format "{{.Ports}}" 2>/dev/null | grep -oE "0.0.0.0:${port}" >/dev/null; then
+                            run_cmd ufw route allow "$port" comment "Docker Sync" >/dev/null 2>&1 || true
+                        fi
                     fi
                     ok "Правило добавлено (включая Docker Route)."
                 fi
@@ -689,12 +693,25 @@ PYEOF
     if [[ $? -eq 0 ]]; then
         ok "Блок Docker UFW Fix добавлен в ${after_rules} (интерфейс: ${iface})"
         
-        # 3. Автоматически переносим текущие правила в route для Docker
-        info "Синхронизирую существующие правила с Docker (route)..."
-        local existing_ports
-        existing_ports=$(ufw status | grep "ALLOW" | grep -v "(v6)" | awk '{print $1}' | grep -oE '^[0-9]+' | sort -u)
-        for p in $existing_ports; do
-            run_cmd ufw route allow "$p" >/dev/null 2>&1 || true
+        # 3. Автоматически переносим только те правила, которые реально нужны Docker
+        info "Синхронизирую только порты Docker-контейнеров с Firewall (route)..."
+        
+        # Получаем список портов, которые реально проброшены в Docker
+        local docker_ports
+        docker_ports=$(docker ps --format "{{.Ports}}" 2>/dev/null | grep -oE '0.0.0.0:[0-9]+' | cut -d: -f2 | sort -u)
+        
+        # Также берем список портов, разрешенных в UFW IN
+        local ufw_in_ports
+        ufw_in_ports=$(ufw status | grep "ALLOW" | grep -v "(v6)" | awk '{print $1}' | grep -oE '^[0-9]+' | sort -u)
+        
+        # Пересекаем их: разрешаем в route только то, что и открыто в UFW, и есть в Docker
+        for p in $ufw_in_ports; do
+            if echo "$docker_ports" | grep -qx "$p"; then
+                run_cmd ufw route allow "$p" >/dev/null 2>&1 || true
+            else
+                # Если порта нет в Docker, но он был в route (очистка от лишнего)
+                run_cmd ufw route delete allow "$p" >/dev/null 2>&1 || true
+            fi
         done
         
         run_cmd ufw reload 2>/dev/null || true
