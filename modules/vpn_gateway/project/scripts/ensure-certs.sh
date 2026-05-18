@@ -129,4 +129,15 @@ fi
 
 EDGE_HTTP_PORT="${EDGE_HTTP_PORT}" EDGE_HTTPS_PORT="${EDGE_HTTPS_PORT}" $DC_CMD -f docker-compose.yml -f docker-compose.edge.yml restart edge-nginx
 
+# Сохраняем сертификаты в персистентное хранилище — переживут git pull и пересоздание контейнеров
+PERSIST_CERTS_DIR="/etc/reshala-bedolaga/certs"
+if [[ -f "${FULLCHAIN}" && -f "${PRIVKEY}" ]]; then
+  mkdir -p "${PERSIST_CERTS_DIR}" 2>/dev/null && \
+    cp -f "${FULLCHAIN}" "${PERSIST_CERTS_DIR}/fullchain.pem" && \
+    cp -f "${PRIVKEY}"   "${PERSIST_CERTS_DIR}/privkey.pem"   && \
+    chmod 600 "${PERSIST_CERTS_DIR}/privkey.pem" && \
+    echo "[ok] Сертификат сохранён в ${PERSIST_CERTS_DIR}" || \
+    echo "[warn] Не удалось сохранить сертификат в ${PERSIST_CERTS_DIR}"
+fi
+
 echo "[ok] Сертификат Let's Encrypt выпущен и применён для ${EDGE_DOMAIN}"

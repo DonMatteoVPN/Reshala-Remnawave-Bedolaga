@@ -90,10 +90,20 @@ _vgw_run_action() {
 
 _vgw_cfg_file()    { echo "$(_vgw_project_dir)/config/gateway.yml"; }
 
-# Персистентное хранилище конфига — вне git-репозитория, git pull его не трогает
+# ══════════════════════════════════════════════════════════════════
+# Персистентное хранилище — вне git, git pull не трогает
+# Путь: /etc/reshala-bedolaga/
+#   gateway.yml        — конфиг шлюза
+#   certs/fullchain.pem — TLS сертификат
+#   certs/privkey.pem   — приватный ключ
+# ══════════════════════════════════════════════════════════════════
 _VGW_PERSIST_DIR="/etc/reshala-bedolaga"
-_vgw_cfg_backup_file() { echo "${_VGW_PERSIST_DIR}/gateway.yml"; }
+_VGW_PERSIST_CERTS_DIR="${_VGW_PERSIST_DIR}/certs"
 
+_vgw_cfg_backup_file()  { echo "${_VGW_PERSIST_DIR}/gateway.yml"; }
+_vgw_certs_dir()        { echo "$(_vgw_project_dir)/edge/certs"; }
+
+# ── Конфиг ────────────────────────────────────────────────────────
 # Сохраняет рабочий конфиг в персистентное хранилище после каждого сохранения настроек
 _vgw_cfg_save_persistent() {
     local cfg_file; cfg_file="$(_vgw_cfg_file)"
@@ -103,7 +113,7 @@ _vgw_cfg_save_persistent() {
     cp -f "$cfg_file" "$bak_file" 2>/dev/null || true
 }
 
-# Автовосстановление: если рабочий конфиг пустой/удалён, но бэкап есть — копируем без вопросов
+# Автовосстановление конфига: если рабочий конфиг пустой/удалён, но бэкап есть — копируем без вопросов
 _vgw_cfg_restore_if_needed() {
     local cfg_file; cfg_file="$(_vgw_cfg_file)"
     local bak_file; bak_file="$(_vgw_cfg_backup_file)"
@@ -130,6 +140,36 @@ except: print('')" 2>/dev/null || echo "")
         cp -f "$bak_file" "$cfg_file" 2>/dev/null && \
             ok "Конфиг автоматически восстановлен из ${_VGW_PERSIST_DIR}" || true
     fi
+}
+
+# ── Сертификаты ───────────────────────────────────────────────────
+# Сохраняет сертификаты в /etc/reshala-bedolaga/certs/ после выпуска/продления
+_vgw_certs_save_persistent() {
+    local certs_dir; certs_dir="$(_vgw_certs_dir)"
+    local fullchain="${certs_dir}/fullchain.pem"
+    local privkey="${certs_dir}/privkey.pem"
+    [[ -f "$fullchain" && -f "$privkey" ]] || return 0
+    mkdir -p "${_VGW_PERSIST_CERTS_DIR}" 2>/dev/null || return 0
+    cp -f "$fullchain" "${_VGW_PERSIST_CERTS_DIR}/fullchain.pem" 2>/dev/null || true
+    cp -f "$privkey"   "${_VGW_PERSIST_CERTS_DIR}/privkey.pem"   2>/dev/null || true
+    chmod 600 "${_VGW_PERSIST_CERTS_DIR}/privkey.pem" 2>/dev/null || true
+}
+
+# Автовосстановление сертификатов: если в edge/certs/ их нет, но бэкап есть — копируем молча
+_vgw_certs_restore_if_needed() {
+    local certs_dir; certs_dir="$(_vgw_certs_dir)"
+    local bak_full="${_VGW_PERSIST_CERTS_DIR}/fullchain.pem"
+    local bak_key="${_VGW_PERSIST_CERTS_DIR}/privkey.pem"
+    # Бэкапа нет — нечего восстанавливать
+    [[ -f "$bak_full" && -f "$bak_key" ]] || return 0
+    # Рабочие сертификаты уже есть — не трогаем
+    [[ -f "${certs_dir}/fullchain.pem" && -f "${certs_dir}/privkey.pem" ]] && return 0
+
+    mkdir -p "$certs_dir" 2>/dev/null || true
+    cp -f "$bak_full" "${certs_dir}/fullchain.pem" 2>/dev/null || true
+    cp -f "$bak_key"  "${certs_dir}/privkey.pem"   2>/dev/null || true
+    chmod 600 "${certs_dir}/privkey.pem" 2>/dev/null || true
+    ok "Сертификаты автоматически восстановлены из ${_VGW_PERSIST_CERTS_DIR}"
 }
 
 
@@ -315,8 +355,9 @@ show_vpn_gateway_menu() {
     while true; do
         clear
         menu_header "🛡️ Маскировщик лендинга Bedolaga" 64 "${C_CYAN}"
-        # Автовосстановление конфига если git pull его удалил
+        # Автовосстановление конфига и сертификатов если git pull их удалил
         _vgw_cfg_restore_if_needed
+        _vgw_certs_restore_if_needed
         # Умный статус-блок: установлен или нет
         _vgw_menu_status_block
         render_menu_items "vpn_gateway"
