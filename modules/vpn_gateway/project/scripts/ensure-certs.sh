@@ -19,6 +19,15 @@ else
   PYTHON="python3"
 fi
 
+# Определяем docker compose команду заранее — нужна для проверки bind mount
+if docker compose version &>/dev/null 2>&1; then
+  DC_CMD="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+  DC_CMD="docker-compose"
+else
+  echo "[error] Не найден ни 'docker compose', ни 'docker-compose'." >&2; exit 1
+fi
+
 mkdir -p "${CERTS_DIR}" "${ACME_WEBROOT_DIR}" "${LE_DIR}"
 
 readarray -t CFG_VALUES < <(CFG_FILE="${CFG_FILE}" "${PYTHON}" - <<'PY'
@@ -49,7 +58,21 @@ if [[ -z "${EDGE_DOMAIN}" ]]; then
 fi
 
 if [[ -f "${FULLCHAIN}" && -f "${PRIVKEY}" ]]; then
-  echo "[ok] Сертификаты уже существуют, выпуск не требуется"
+  echo "[ok] Сертификаты уже существуют на хосте"
+
+  # Проверяем что контейнер видит файлы через bind mount (защита от неправильного CWD при запуске)
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "vpn-edge-nginx"; then
+    if ! docker exec vpn-edge-nginx test -f /etc/nginx/certs/fullchain.pem 2>/dev/null; then
+      echo "[warn] Контейнер не видит сертификат — bind mount сломан. Пересоздаю контейнер..."
+      EDGE_HTTP_PORT="${EDGE_HTTP_PORT}" EDGE_HTTPS_PORT="${EDGE_HTTPS_PORT}" \
+        $DC_CMD -f docker-compose.yml -f docker-compose.edge.yml up -d --force-recreate edge-nginx
+      sleep 2
+      echo "[ok] Контейнер пересоздан, сертификат доступен"
+    else
+      echo "[ok] Контейнер видит сертификат — всё в порядке"
+    fi
+  fi
+
   exit 0
 fi
 
@@ -83,15 +106,6 @@ EDGE_DOMAIN=${EDGE_DOMAIN}
 EDGE_HTTP_PORT=${EDGE_HTTP_PORT}
 EDGE_HTTPS_PORT=${EDGE_HTTPS_PORT}
 ENVEOF
-
-# Поддерживаем и docker compose (v2+), и legacy docker-compose
-if docker compose version &>/dev/null 2>&1; then
-  DC_CMD="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then
-  DC_CMD="docker-compose"
-else
-  echo "[error] Не найден ни 'docker compose', ни 'docker-compose'." >&2; exit 1
-fi
 
 EDGE_HTTP_PORT="${EDGE_HTTP_PORT}" EDGE_HTTPS_PORT="${EDGE_HTTPS_PORT}" $DC_CMD -f docker-compose.yml -f docker-compose.edge.yml up -d --build
 

@@ -170,6 +170,13 @@ _vgw_certs_restore_if_needed() {
     cp -f "$bak_key"  "${certs_dir}/privkey.pem"   2>/dev/null || true
     chmod 600 "${certs_dir}/privkey.pem" 2>/dev/null || true
     ok "Сертификаты автоматически восстановлены из ${_VGW_PERSIST_CERTS_DIR}"
+
+    # Контейнер мог стартовать ДО восстановления (volume был пустым) — перезапускаем nginx
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "vpn-edge-nginx"; then
+        ok "Перезапускаю nginx в контейнере чтобы подхватил сертификаты..."
+        docker exec vpn-edge-nginx nginx -s reload 2>/dev/null || \
+            docker restart vpn-edge-nginx 2>/dev/null || true
+    fi
 }
 
 
