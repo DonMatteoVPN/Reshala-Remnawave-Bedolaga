@@ -12,4 +12,4 @@ fi
 
 .venv/bin/python -m pytest -q
 .venv/bin/python -m compileall app
-curl -fsS http://127.0.0.1:8088/health >/dev/null || true
+curl -fsS http://127.0.0.1:8080/health > /dev/null || true

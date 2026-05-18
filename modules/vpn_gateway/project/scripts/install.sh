@@ -23,6 +23,76 @@ require_cmd() {
   fi
 }
 
+# ============================================================
+# Авто-установка Docker Engine + Docker Compose Plugin
+# Источник: https://get.docker.com (официальный скрипт Docker Inc.)
+# Ставит самую свежую стабильную версию docker-ce + docker-compose-plugin
+# ============================================================
+auto_install_docker() {
+  if command -v docker > /dev/null 2>&1; then
+    log "Docker уже установлен: $(docker --version)"
+    return 0
+  fi
+
+  log "Docker не найден. Устанавливаю автоматически..."
+
+  if [[ "$(id -u)" -ne 0 ]]; then
+    err "Для установки Docker нужны права root. Запустите скрипт через sudo или от root."
+    exit 1
+  fi
+
+  # Требуется curl или wget
+  if command -v curl > /dev/null 2>&1; then
+    log "Скачиваю официальный install-скрипт Docker (get.docker.com)..."
+    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  elif command -v wget > /dev/null 2>&1; then
+    log "Скачиваю официальный install-скрипт Docker через wget..."
+    wget -qO /tmp/get-docker.sh https://get.docker.com
+  else
+    err "Не найден ни curl, ни wget. Установите один из них: apt install curl"
+    exit 1
+  fi
+
+  log "Запускаю установку Docker Engine..."
+  sh /tmp/get-docker.sh
+  rm -f /tmp/get-docker.sh
+
+  # Включаем и запускаем docker.service
+  if command -v systemctl > /dev/null 2>&1; then
+    systemctl enable docker --now 2>/dev/null || true
+  fi
+
+  if ! command -v docker > /dev/null 2>&1; then
+    err "Установка Docker завершилась, но команда 'docker' недоступна. Проверьте PATH."
+    exit 1
+  fi
+
+  log "Docker успешно установлен: $(docker --version)"
+}
+
+# ============================================================
+# Авто-установка python3 если не найден
+# ============================================================
+auto_install_python3() {
+  if command -v python3 > /dev/null 2>&1; then
+    return 0
+  fi
+
+  log "python3 не найден. Пробую установить через apt..."
+  if command -v apt-get > /dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y python3 python3-venv python3-pip -qq
+  else
+    err "Не удалось установить python3 автоматически. Установите вручную: apt install python3"
+    exit 1
+  fi
+
+  if ! command -v python3 > /dev/null 2>&1; then
+    err "python3 не найден после установки."
+    exit 1
+  fi
+  log "python3 установлен: $(python3 --version)"
+}
+
 validate_config() {
   CFG_FILE="${CFG_FILE}" python3 - <<'PY'
 import os
@@ -57,20 +127,36 @@ EOF
   exit 0
 }
 
+# ── Авто-установка всех зависимостей ──────────────────────────
+auto_install_python3
+auto_install_docker
+
 log "Проверяю зависимости..."
 require_cmd python3
-require_cmd docker
 
-# Поддерживаем и docker compose (плагин, v2+), и legacy docker-compose
-if docker compose version &>/dev/null 2>&1; then
+# Поддерживаем docker compose plugin (v2+) и legacy docker-compose
+if docker compose version > /dev/null 2>&1; then
   DC_CMD="docker compose"
-elif command -v docker-compose &>/dev/null; then
+elif command -v docker-compose > /dev/null 2>&1; then
   DC_CMD="docker-compose"
 else
-  err "Не найден ни 'docker compose', ни 'docker-compose'. Установите Docker Compose."
-  exit 1
+  # docker-compose-plugin ставится вместе с docker-ce через get.docker.com
+  # но на некоторых системах может потребоваться отдельная установка
+  log "Docker Compose Plugin не найден. Пробую установить через apt..."
+  if command -v apt-get > /dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y docker-compose-plugin -qq
+    if docker compose version > /dev/null 2>&1; then
+      DC_CMD="docker compose"
+    else
+      err "Не удалось установить Docker Compose Plugin."
+      exit 1
+    fi
+  else
+    err "Не найден ни 'docker compose', ни 'docker-compose'. Установите Docker Compose Plugin."
+    exit 1
+  fi
 fi
-log "Используется: ${DC_CMD}"
+log "Docker Compose: ${DC_CMD} ($(${DC_CMD} version --short 2>/dev/null || echo 'ok'))"
 
 # Проверяем PyYAML — если нет, устанавливаем автоматически
 if ! python3 -c "import yaml" 2>/dev/null; then

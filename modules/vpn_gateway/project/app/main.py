@@ -224,7 +224,8 @@ def create_app(config_path: str = "config/gateway.yml") -> FastAPI:
         pool = cfg.upstreams[route["upstream_pool"]]
 
         if pool.strategy == "first_alive":
-            await mirror_manager.refresh(pool.targets, timeout_ms=pool.healthcheck.get("timeout_ms", 1500))
+            # TTL-кэш: обновляем health-check не чаще раза в 10 секунд
+            await mirror_manager.refresh_if_stale(pool.targets, timeout_ms=pool.healthcheck.get("timeout_ms", 1500))
             selected = mirror_manager.pick_first_alive(pool.targets)
         else:
             selected = pool.targets[0] if pool.targets else None
@@ -246,7 +247,9 @@ def create_app(config_path: str = "config/gateway.yml") -> FastAPI:
 
         body = await request.body()
         headers = dict(request.headers)
-        headers.pop("host", None)
+        # Явно задаём Host для upstream — иначе некоторые backend'ы вернут 400
+        # или ответят default vhost'ом вместо нужного
+        headers["host"] = urlsplit(target_url).netloc
         upstream_response = await forward_request(request.method, target_url, headers=headers, body=body)
 
         response_headers = dict(upstream_response.headers)
@@ -260,6 +263,15 @@ def create_app(config_path: str = "config/gateway.yml") -> FastAPI:
         response_headers.pop("date", None)
         response_headers.pop("content-length", None)
         response_headers.pop("content-encoding", None)
+
+        # hide_origin_headers: удаляем технические заголовки upstream
+        if cfg.raw.get("security", {}).get("hide_origin_headers", True):
+            _origin_headers = {"x-powered-by", "x-backend-server", "x-aspnet-version",
+                               "x-aspnetmvc-version", "x-request-id", "cf-ray",
+                               "x-amz-request-id", "x-amzn-trace-id"}
+            for h in list(response_headers.keys()):
+                if h.lower() in _origin_headers:
+                    response_headers.pop(h, None)
 
         public_domain = (cfg.raw.get("project", {}) or {}).get("public_domain", "")
         origin_domain = (cfg.raw.get("quick_setup", {}) or {}).get("origin_domain", "")

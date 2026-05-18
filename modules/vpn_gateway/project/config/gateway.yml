@@ -102,7 +102,7 @@ upstreams:
       pass_threshold: 1
     # ВАЖНО: автоматически подменяется из quick_setup.origin_domain
     targets:
-      - "https://cabinet-test.example.com"
+      - "https://cabinet-placeholder.invalid"
 
   landing_pool:
     strategy: first_alive

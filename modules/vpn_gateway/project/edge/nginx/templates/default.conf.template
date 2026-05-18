@@ -27,7 +27,7 @@ server {
     }
 
     location / {
-        return 301 https://$host:${EDGE_HTTPS_PORT}$request_uri;
+        return 301 https://$host$request_uri;
     }
 }
 

@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from time import time
 import httpx
 
+_REFRESH_TTL_SEC = 10
+
 
 @dataclass
 class MirrorState:
@@ -25,6 +27,11 @@ class MirrorManager:
                     new_state[target] = False
         self.state.alive = new_state
         self.state.last_check = time()
+
+    async def refresh_if_stale(self, targets: list[str], timeout_ms: int = 1500) -> None:
+        """Обновляет health-check не чаще раза в _REFRESH_TTL_SEC секунд."""
+        if time() - self.state.last_check > _REFRESH_TTL_SEC:
+            await self.refresh(targets, timeout_ms)
 
     def pick_first_alive(self, targets: list[str]) -> str | None:
         for target in targets:

@@ -19,6 +19,9 @@ edge/logs/*.log
 .env.*
 edge/.env.edge
 
+# Активный конфиг с реальными доменами (не трекать в Git — использовать gateway.example.yml как шаблон)
+config/gateway.yml
+
 # Сертификаты и runtime-артефакты edge
 edge/certs/*.pem
 edge/letsencrypt/
