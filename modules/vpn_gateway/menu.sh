@@ -136,7 +136,22 @@ PY2
 
 _vgw_update_quick_setup() {
     local public_domain="$1" origin_domain="$2" default_offer="$3" acme_enabled="$4" acme_email="$5" cfg_file="$(_vgw_cfg_file)"
-    [[ -f "$cfg_file" ]] || { printf_error "Не найден config/gateway.yml: ${cfg_file}"; return 1; }
+    local project_dir="$(_vgw_project_dir)"
+    local example_file="${project_dir}/config/gateway.example.yml"
+
+    # Если gateway.yml не существует — создаём из шаблона автоматически.
+    # Это нормально после git pull, т.к. gateway.yml исключён из git.
+    if [[ ! -f "$cfg_file" ]]; then
+        if [[ -f "$example_file" ]]; then
+            info "config/gateway.yml не найден. Создаю из шаблона..."
+            cp "$example_file" "$cfg_file" || { printf_error "Не удалось скопировать шаблон: ${example_file} → ${cfg_file}"; return 1; }
+            ok "Создан config/gateway.yml из шаблона."
+        else
+            printf_error "Не найдены ни config/gateway.yml, ни config/gateway.example.yml в: ${project_dir}/config/"
+            return 1
+        fi
+    fi
+
     local py_bin; py_bin="$(_vgw_python)"
     CFG_FILE="$cfg_file" PUBLIC_DOMAIN="$public_domain" ORIGIN_DOMAIN="$origin_domain" DEFAULT_OFFER="$default_offer" ACME_ENABLED="$acme_enabled" ACME_EMAIL="$acme_email" "$py_bin" - <<'PY2'
 import os
@@ -162,6 +177,7 @@ p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding
 print('ok')
 PY2
 }
+
 
 _vgw_prompt_and_apply_common() {
     local mode="$1"
