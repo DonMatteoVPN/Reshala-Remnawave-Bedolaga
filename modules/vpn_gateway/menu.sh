@@ -448,12 +448,15 @@ _vgw_menu_status_block() {
     local http_ok="⏳ проверка..." http_color="$W"
     if command -v curl > /dev/null 2>&1; then
         local http_code
-        http_code=$(curl -o /dev/null -sS -w "%{http_code}" --max-time 3 \
-            "https://${public_domain}/" 2>/dev/null || echo "000")
+        # -k: принимаем self-signed (иначе curl вернёт 000 при ошибке TLS)
+        # 2>/dev/null: stderr не должен попасть в %{http_code}
+        http_code=$(curl -o /dev/null -sk -w "%{http_code}" --max-time 4 \
+            "https://${public_domain}/" 2>/dev/null)
+        http_code="${http_code:-000}"
         if [[ "$http_code" =~ ^(200|301|302|307|308)$ ]]; then
             http_ok="✅ отвечает (HTTP ${http_code})" http_color="$G"
         elif [[ "$http_code" == "000" ]]; then
-            http_ok="❌ нет ответа" http_color="$R"
+            http_ok="❌ нет ответа (порт не слушает?)" http_color="$R"
         else
             http_ok="⚠️  HTTP ${http_code}" http_color="$W"
         fi
