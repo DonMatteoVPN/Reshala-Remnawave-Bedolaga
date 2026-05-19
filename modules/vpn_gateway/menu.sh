@@ -851,45 +851,12 @@ _vgw_nginx_inject_auto() {
         return 1
     fi
 
-    local csrc_type="" csrc_host="" csrc_container=""
-    if [[ "$csrc" == *":"* ]]; then
-        csrc_type=$(echo "$csrc" | cut -d: -f1)
-        csrc_host=$(echo "$csrc" | cut -d: -f2)
-        csrc_container=$(echo "$csrc" | cut -d: -f3-)
+    if [[ -n "$cname" ]]; then
+        cert="/etc/nginx/certs/fullchain.pem"
+        key="/etc/nginx/certs/privkey.pem"
     else
-        csrc_type="$csrc"
-    fi
-
-    if [[ "$csrc_type" != "none" ]]; then
-        if [[ -n "$cname" ]]; then
-            if [[ "$csrc_type" == "reshala" ]]; then
-                cert="/etc/nginx/certs/fullchain.pem"
-                key="/etc/nginx/certs/privkey.pem"
-            else
-                # Если это внешний nginx, проверяем существование файлов на хосте,
-                # но пути прописываем контейнерные!
-                local host_cert="${csrc_host}/fullchain.pem"
-                local host_key="${csrc_host}/privkey.pem"
-                if [[ -f "$host_cert" && -f "$host_key" && -n "$csrc_container" ]]; then
-                    cert="${csrc_container}/fullchain.pem"
-                    key="${csrc_container}/privkey.pem"
-                else
-                    cert="/etc/nginx/certs/fullchain.pem"
-                    key="/etc/nginx/certs/privkey.pem"
-                fi
-            fi
-        else
-            # Хостовый nginx
-            local host_cert="${csrc_host}/fullchain.pem"
-            local host_key="${csrc_host}/privkey.pem"
-            if [[ -f "$host_cert" && -f "$host_key" ]]; then
-                cert="$host_cert"
-                key="$host_key"
-            else
-                cert="/etc/nginx/certs/fullchain.pem"
-                key="/etc/nginx/certs/privkey.pem"
-            fi
-        fi
+        cert="$(_vgw_certs_dir)/fullchain.pem"
+        key="$(_vgw_certs_dir)/privkey.pem"
     fi
 
     case "$ntype" in
@@ -952,47 +919,15 @@ _vgw_nginx_manual_guide() {
     local ntype="$1" cname="${2:-}" cpath="${3:-}" csrc="${4:-none}" domain="$5" gport="$6"
     local W="$C_YELLOW" C="$C_CYAN" G="$C_GREEN" R="$C_RED" B="$C_BOLD" E="$C_RESET"
 
-    local csrc_type="" csrc_host="" csrc_container=""
-    if [[ "$csrc" == *":"* ]]; then
-        csrc_type=$(echo "$csrc" | cut -d: -f1)
-        csrc_host=$(echo "$csrc" | cut -d: -f2)
-        csrc_container=$(echo "$csrc" | cut -d: -f3-)
-    else
-        csrc_type="$csrc"
-    fi
-
     local cert="" key=""
-    local docker_mount_notice="0"
+    local docker_mount_notice="1"
 
     if [[ -n "$cname" ]]; then
-        if [[ "$csrc_type" == "reshala" ]]; then
-            docker_mount_notice="1"
-            cert="/etc/nginx/certs/fullchain.pem"
-            key="/etc/nginx/certs/privkey.pem"
-        else
-            # Если это внешние сертификаты, проверяем существование на хосте
-            local host_cert="${csrc_host}/fullchain.pem"
-            local host_key="${csrc_host}/privkey.pem"
-            if [[ -f "$host_cert" && -f "$host_key" && -n "$csrc_container" ]]; then
-                # Используем путь внутри контейнера
-                cert="${csrc_container}/fullchain.pem"
-                key="${csrc_container}/privkey.pem"
-            else
-                cert="/etc/nginx/certs/fullchain.pem"
-                key="/etc/nginx/certs/privkey.pem"
-            fi
-        fi
+        cert="/etc/nginx/certs/fullchain.pem"
+        key="/etc/nginx/certs/privkey.pem"
     else
-        # Хостовый nginx
-        local host_cert="${csrc_host}/fullchain.pem"
-        local host_key="${csrc_host}/privkey.pem"
-        if [[ -f "$host_cert" && -f "$host_key" ]]; then
-            cert="$host_cert"
-            key="$host_key"
-        else
-            cert="/etc/nginx/certs/fullchain.pem"
-            key="/etc/nginx/certs/privkey.pem"
-        fi
+        cert="$(_vgw_certs_dir)/fullchain.pem"
+        key="$(_vgw_certs_dir)/privkey.pem"
     fi
 
     local conf_content
@@ -1042,12 +977,8 @@ _vgw_nginx_manual_guide() {
         echo -e "     добавьте следующие блоки:"
         echo "  ────────────────────────────────────────────────────"
 
-        local stream_ssl_cert="/opt/certwardenclient/certs/fullchain.pem"
-        local stream_ssl_key="/opt/certwardenclient/certs/privkey.pem"
-        if [[ -n "$cert" && -n "$key" ]]; then
-            stream_ssl_cert="$cert"
-            stream_ssl_key="$key"
-        fi
+        local stream_ssl_cert="$cert"
+        local stream_ssl_key="$key"
 
         cat <<EOF
 server {
