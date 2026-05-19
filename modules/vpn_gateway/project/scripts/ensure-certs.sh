@@ -60,23 +60,35 @@ fi
 if [[ -f "${FULLCHAIN}" && -f "${PRIVKEY}" ]]; then
   # Проверяем, совпадает ли домен в сертификате с текущим EDGE_DOMAIN
   cert_domain=$(openssl x509 -noout -subject -in "${FULLCHAIN}" 2>/dev/null | sed -n 's/^.*CN\s*=\s*\(.*\)$/\1/p' || echo "")
+  cert_subject=$(openssl x509 -noout -subject -in "${FULLCHAIN}" 2>/dev/null || echo "")
+  cert_issuer=$(openssl x509 -noout -issuer -in "${FULLCHAIN}" 2>/dev/null || echo "")
+
+  is_self_signed=0
+  if [[ "${cert_subject}" == "${cert_issuer}" ]]; then
+    is_self_signed=1
+  fi
+
   if [[ "${cert_domain}" == "${EDGE_DOMAIN}" || "${cert_domain}" == "*.${EDGE_DOMAIN}" ]]; then
-    echo "[ok] Сертификаты уже существуют на хосте и соответствуют домену ${EDGE_DOMAIN}"
+    if [[ "${is_self_signed}" -eq 1 ]]; then
+      echo "[warn] Обнаружен временный самоподписанный сертификат для ${EDGE_DOMAIN}. Запускаю выпуск настоящего..."
+    else
+      echo "[ok] Сертификаты уже существуют на хосте и соответствуют домену ${EDGE_DOMAIN}"
 
-    # Проверяем что контейнер видит файлы через bind mount (защита от неправильного CWD при запуске)
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "vpn-edge-nginx"; then
-      if ! docker exec vpn-edge-nginx test -f /etc/nginx/certs/fullchain.pem 2>/dev/null; then
-        echo "[warn] Контейнер не видит сертификат — bind mount сломан. Пересоздаю контейнер..."
-        EDGE_HTTP_PORT="${EDGE_HTTP_PORT}" EDGE_HTTPS_PORT="${EDGE_HTTPS_PORT}" \
-          $DC_CMD -f docker-compose.yml -f docker-compose.edge.yml up -d --force-recreate edge-nginx
-        sleep 2
-        echo "[ok] Контейнер пересоздан, сертификат доступен"
-      else
-        echo "[ok] Контейнер видит сертификат — всё в порядке"
+      # Проверяем что контейнер видит файлы через bind mount (защита от неправильного CWD при запуске)
+      if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "vpn-edge-nginx"; then
+        if ! docker exec vpn-edge-nginx test -f /etc/nginx/certs/fullchain.pem 2>/dev/null; then
+          echo "[warn] Контейнер не видит сертификат — bind mount сломан. Пересоздаю контейнер..."
+          EDGE_HTTP_PORT="${EDGE_HTTP_PORT}" EDGE_HTTPS_PORT="${EDGE_HTTPS_PORT}" \
+            $DC_CMD -f docker-compose.yml -f docker-compose.edge.yml up -d --force-recreate edge-nginx
+          sleep 2
+          echo "[ok] Контейнер пересоздан, сертификат доступен"
+        else
+          echo "[ok] Контейнер видит сертификат — всё в порядке"
+        fi
       fi
-    fi
 
-    exit 0
+      exit 0
+    fi
   else
     echo "[warn] Найден сертификат для другого домена (${cert_domain}). Перевыпускаю для ${EDGE_DOMAIN}..."
     rm -f "${FULLCHAIN}" "${PRIVKEY}"
