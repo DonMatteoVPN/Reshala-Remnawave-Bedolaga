@@ -596,6 +596,19 @@ _f2b_setup() {
         err "Не удалось установить Fail2Ban. Выполните установку вручную и попробуйте снова."
         return 1
     fi
+
+    # Устанавливаем python3-systemd для интеграции с Systemd Journal (особенно важно на Debian 12 / Ubuntu 22.04+ без rsyslog)
+    if command -v apt-get &>/dev/null; then
+        if ! dpkg -l python3-systemd &>/dev/null && ! python3 -c "import systemd" &>/dev/null; then
+            info "Устанавливаю пакет python3-systemd для интеграции с журналом systemd..."
+            run_cmd apt-get update && run_cmd apt-get install -y python3-systemd
+        fi
+    elif command -v yum &>/dev/null; then
+        if ! rpm -q python3-systemd &>/dev/null && ! python3 -c "import systemd" &>/dev/null; then
+            info "Устанавливаю пакет python3-systemd для интеграции с журналом systemd..."
+            run_cmd yum install -y python3-systemd
+        fi
+    fi
     
     if [[ -f "/etc/fail2ban/jail.local" ]]; then
         info "Создаю бэкап существующего jail.local..."
@@ -656,6 +669,17 @@ _f2b_setup() {
     fi
     # ---
 
+    # Выбор механизма отслеживания SSH логов
+    local ssh_log_config="logpath = /var/log/auth.log"
+    if [[ ! -f "/var/log/auth.log" ]]; then
+        if [[ -f "/var/log/secure" ]]; then
+            ssh_log_config="logpath = /var/log/secure"
+        elif command -v journalctl &>/dev/null; then
+            info "Системные лог-файлы не найдены. Настраиваю джейл sshd на использование backend = systemd."
+            ssh_log_config="backend = systemd"
+        fi
+    fi
+
     info "Создаю /etc/fail2ban/jail.local..."
 
     run_cmd tee /etc/fail2ban/jail.local > /dev/null <<JAIL
@@ -670,7 +694,7 @@ ignoreip = $ignoreip
 enabled = true
 port = any
 filter = sshd
-logpath = /var/log/auth.log
+$ssh_log_config
 action = ufw[name=sshd, port=any, protocol=tcp]
 JAIL
 
@@ -711,20 +735,22 @@ _f2b_detect_nginx_log() {
         fi
     done
 
-    # Docker volumes
+    # Docker volumes (проверяем все контейнеры, включая остановленные)
     local docker_paths
     if command -v docker &>/dev/null; then
-        mapfile -t docker_paths < <(docker inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\n"}}{{end}}{{end}}' $(docker ps -q) 2>/dev/null | grep -i "log\|nginx" | sort -u)
+        mapfile -t docker_paths < <(docker inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\n"}}{{end}}{{end}}' $(docker ps -a -q) 2>/dev/null | grep -i "log\|nginx" | sort -u)
         for dp in "${docker_paths[@]}"; do
             if [[ -d "$dp" ]]; then
-                mapfile -t -O ${#found_logs[@]} found_logs < <(find "$dp" -name "*${log_type}*" 2>/dev/null | head -5)
+                mapfile -t -O ${#found_logs[@]} found_logs < <(find "$dp" -type f \( -name "*${log_type}*" -o -name "${log_type}.log" \) 2>/dev/null | head -5)
             fi
         done
     fi
 
-    # Дополнительный поиск
+    # Дополнительный умный поиск по всей системе (для случаев, когда контейнер остановлен или пути кастомные)
     if [[ ${#found_logs[@]} -eq 0 ]]; then
-        mapfile -t found_logs < <(find /var/log /opt /home -name "*nginx*${log_type}*" 2>/dev/null | head -10)
+        # Ищем файлы *.log, содержащие в названии "access" или "error", 
+        # у которых в полном пути есть nginx, reshala, remnawave, proxy или gate
+        mapfile -t found_logs < <(find /var/log /opt /home -type f \( -name "*${log_type}*.log" -o -name "${log_type}.log" \) \( -path "*nginx*" -o -path "*reshala*" -o -path "*remnawave*" -o -path "*proxy*" \) 2>/dev/null | head -15)
     fi
 
     if [[ ${#found_logs[@]} -gt 0 ]]; then
@@ -769,19 +795,30 @@ _f2b_detect_syslog() {
     if [[ -f "/var/log/syslog" ]]; then found_logs+=("/var/log/syslog"); fi
     if [[ -f "/var/log/messages" ]]; then found_logs+=("/var/log/messages"); fi
     if [[ -f "/var/log/auth.log" ]]; then found_logs+=("/var/log/auth.log"); fi
+    if [[ -f "/var/log/secure" ]]; then found_logs+=("/var/log/secure"); fi
+
+    # Если доступен journalctl, добавляем systemd journal как виртуальный лог-источник
+    if command -v journalctl &>/dev/null; then
+        found_logs+=("systemd")
+    fi
 
     if [[ ${#found_logs[@]} -gt 0 ]]; then
         info "Подсказка по выбору системного лог-файла:"
         printf_description " • В Ubuntu/Debian используется ${C_YELLOW}/var/log/syslog${C_RESET} или ${C_YELLOW}/var/log/auth.log${C_RESET}"
         printf_description " • В CentOS/RHEL/Alma используется ${C_YELLOW}/var/log/messages${C_RESET} или ${C_YELLOW}/var/log/secure${C_RESET}"
+        printf_description " • На современных системах без rsyslog рекомендуется использовать ${C_YELLOW}systemd-journald${C_RESET}"
         echo ""
 
         ok "Найдены системные логи (${#found_logs[@]}):"
         local i=1
         for log_file in "${found_logs[@]}"; do
-            local size
-            size=$(du -h "$log_file" 2>/dev/null | awk '{print $1}')
-            printf_description "  ${C_WHITE}${i})${C_RESET} ${log_file} ${C_GRAY}(${size:-?})${C_RESET}"
+            if [[ "$log_file" == "systemd" ]]; then
+                printf_description "  ${C_WHITE}${i})${C_RESET} systemd-journald ${C_GRAY}(Системный журнал Systemd)${C_RESET}"
+            else
+                local size
+                size=$(du -h "$log_file" 2>/dev/null | awk '{print $1}')
+                printf_description "  ${C_WHITE}${i})${C_RESET} ${log_file} ${C_GRAY}(${size:-?})${C_RESET}"
+            fi
             ((i++))
         done
         echo ""
@@ -835,6 +872,12 @@ _f2b_jail_submenu() {
             local extracted_log
             extracted_log=$(grep -A 10 "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null | grep "^\s*logpath\s*=" | head -1 | awk -F'=' '{print $2}' | xargs)
             [[ -n "$extracted_log" ]] && current_log="$extracted_log"
+
+            local extracted_backend
+            extracted_backend=$(grep -A 10 "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null | grep "^\s*backend\s*=" | head -1 | awk -F'=' '{print $2}' | xargs)
+            if [[ "$extracted_backend" == "systemd" ]]; then
+                current_log="systemd"
+            fi
             
             local extracted_max
             extracted_max=$(grep -A 10 "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null | grep "^\s*maxretry\s*=" | head -1 | awk -F'=' '{print $2}' | xargs)
@@ -862,7 +905,13 @@ _f2b_jail_submenu() {
         else
             printf_description "Статус: ${C_RED}Выключен${C_RESET}"
         fi
-        printf_description "Файл лога: ${C_CYAN}$current_log${C_RESET}"
+        
+        if [[ "$current_log" == "systemd" ]]; then
+            printf_description "Файл лога: ${C_CYAN}systemd-journald (Systemd)${C_RESET}"
+        else
+            printf_description "Файл лога: ${C_CYAN}$current_log${C_RESET}"
+        fi
+        
         printf_description "Попыток (maxretry): ${C_CYAN}$current_maxretry${C_RESET}"
         printf_description "Метод блокировки: ${C_CYAN}$current_action_desc${C_RESET}"
         
@@ -901,7 +950,21 @@ _f2b_jail_submenu() {
                     fi
                     if ! grep -q "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null; then
                         info "Добавляю секцию в jail.local..."
-                        cat <<JAIL | run_cmd tee -a /etc/fail2ban/jail.local > /dev/null
+                        if [[ "$current_log" == "systemd" ]]; then
+                            cat <<JAIL | run_cmd tee -a /etc/fail2ban/jail.local > /dev/null
+
+[$jail_name]
+enabled = true
+port = $current_p
+filter = $jail_name
+backend = systemd
+maxretry = $current_maxretry
+findtime = 600
+bantime = 86400
+action = $current_a
+JAIL
+                        else
+                            cat <<JAIL | run_cmd tee -a /etc/fail2ban/jail.local > /dev/null
 
 [$jail_name]
 enabled = true
@@ -913,6 +976,7 @@ findtime = 600
 bantime = 86400
 action = $current_a
 JAIL
+                        fi
                     else
                         run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s/enabled\s*=\s*false/enabled = true/" /etc/fail2ban/jail.local
                     fi
@@ -952,9 +1016,27 @@ JAIL
                     F2B_SELECTED_LOG=$(ask_non_empty "Введите путь к логу") || continue
                 fi
                 
-                if [[ -n "$F2B_SELECTED_LOG" ]] && [[ -f "$F2B_SELECTED_LOG" ]]; then
+                if [[ -n "$F2B_SELECTED_LOG" ]] && { [[ "$F2B_SELECTED_LOG" == "systemd" ]] || [[ -f "$F2B_SELECTED_LOG" ]]; }; then
                     if grep -q "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null; then
-                        run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s|^logpath.*|logpath = ${F2B_SELECTED_LOG}|" /etc/fail2ban/jail.local
+                        if [[ "$F2B_SELECTED_LOG" == "systemd" ]]; then
+                            # Удаляем logpath
+                            run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ {/^\s*logpath\s*=/d}" /etc/fail2ban/jail.local
+                            # Добавляем или обновляем backend = systemd
+                            if grep -A 10 "^\s*\[$jail_name\]" /etc/fail2ban/jail.local | grep -q "^\s*backend\s*="; then
+                                run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s|^\s*backend\s*=.*|backend = systemd|" /etc/fail2ban/jail.local
+                            else
+                                run_cmd sed -i "/^\[$jail_name\]/a backend = systemd" /etc/fail2ban/jail.local
+                            fi
+                        else
+                            # Удаляем backend = systemd
+                            run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ {/^\s*backend\s*=\s*systemd/d}" /etc/fail2ban/jail.local
+                            # Добавляем или обновляем logpath
+                            if grep -A 10 "^\s*\[$jail_name\]" /etc/fail2ban/jail.local | grep -q "^\s*logpath\s*="; then
+                                run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s|^\s*logpath\s*=.*|logpath = ${F2B_SELECTED_LOG}|" /etc/fail2ban/jail.local
+                            else
+                                run_cmd sed -i "/^\[$jail_name\]/a logpath = ${F2B_SELECTED_LOG}" /etc/fail2ban/jail.local
+                            fi
+                        fi
                         ok "Лог обновлен."
                         [[ "$is_enabled" == "true" ]] && run_cmd systemctl reload fail2ban
                     else
