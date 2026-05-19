@@ -557,31 +557,407 @@ PY
     _vgw_cfg_save_persistent
 }
 
-# Сканирует nginx на хосте и в docker, возвращает тип: "host", "docker" или ""
-_vgw_detect_nginx() {
-    # Проверяем хостовый nginx
-    if command -v nginx &>/dev/null && nginx -v &>/dev/null 2>&1; then
-        echo "host"
-        return
+# ══════════════════════════════════════════════════════════════════
+# Умный детектор nginx-окружения (5 типов)
+# Возвращает строку:
+#   free                          — порты свободны
+#   our_container                 — наш vpn-edge-nginx уже занимает порты
+#   host:nginx                    — хостовый systemd nginx
+#   docker:conf.d:NAME:PATH       — docker nginx с bind-mount conf.d (remnawave-panel)
+#   docker:hostnet:NAME:CFGPATH   — docker nginx с network_mode:host (remnawave-node)
+#   docker:nginx:NAME             — docker nginx прочий (порты 80:80)
+#   unknown                       — занято чем-то неизвестным
+# ══════════════════════════════════════════════════════════════════
+_vgw_smart_nginx_detect() {
+    local http_port="${1:-80}" https_port="${2:-443}"
+
+    # Наш контейнер уже запущен?
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "vpn-edge-nginx"; then
+        echo "our_container"; return 0
     fi
-    # Проверяем Docker-контейнеры с nginx в имени/образе
+
+    # Порты свободны?
+    if _vgw_check_port_free "$http_port" && _vgw_check_port_free "$https_port"; then
+        echo "free"; return 0
+    fi
+
+    # Хостовый nginx?
+    if systemctl is-active --quiet nginx 2>/dev/null || \
+       { command -v nginx &>/dev/null && nginx -v &>/dev/null 2>&1; }; then
+        echo "host:nginx"; return 0
+    fi
+
+    # Docker контейнер занимает порт?
     if command -v docker &>/dev/null; then
-        local nginx_containers
-        nginx_containers=$(docker ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | grep -i nginx | grep -v vpn-edge-nginx | head -1)
-        if [[ -n "$nginx_containers" ]]; then
-            echo "docker:$(echo "$nginx_containers" | awk '{print $1}')"
-            return
-        fi
+        local cname cimage
+        # ищем любой запущенный nginx-контейнер кроме нашего
+        while IFS=$'\t' read -r cname cimage; do
+            [[ "$cname" == "vpn-edge-nginx" ]] && continue
+            [[ -z "$cname" ]] && continue
+
+            # Тип 4: модульный conf.d (bind mount /etc/nginx/conf.d → хост-директория)
+            local confd_host
+            confd_host=$(docker inspect "$cname" 2>/dev/null \
+                --format='{{range .Mounts}}{{if eq .Destination "/etc/nginx/conf.d"}}{{.Source}}{{end}}{{end}}' \
+                | head -1)
+            if [[ -n "$confd_host" && -d "$confd_host" ]]; then
+                echo "docker:conf.d:${cname}:${confd_host}"; return 0
+            fi
+
+            # Тип 3: network_mode host (remnawave-node стиль)
+            local netmode
+            netmode=$(docker inspect "$cname" 2>/dev/null \
+                --format='{{.HostConfig.NetworkMode}}' | head -1)
+            if [[ "$netmode" == "host" ]]; then
+                # пытаемся найти путь к nginx.conf через bind mounts
+                local nginx_conf_host
+                nginx_conf_host=$(docker inspect "$cname" 2>/dev/null \
+                    --format='{{range .Mounts}}{{if eq .Destination "/etc/nginx/nginx.conf"}}{{.Source}}{{end}}{{end}}' \
+                    | head -1)
+                echo "docker:hostnet:${cname}:${nginx_conf_host:-/etc/nginx/nginx.conf}"
+                return 0
+            fi
+
+            # Тип 5: прочий docker nginx
+            echo "docker:nginx:${cname}"; return 0
+        done < <(docker ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | grep -i nginx)
     fi
-    echo ""
+
+    echo "unknown"
 }
 
-# Находит конфиг-директорию хостового nginx
+# Определяет источник SSL-сертификатов для найденного nginx-контейнера
+_vgw_detect_cert_source() {
+    local container="${1:-}"
+    # CertWarden?
+    if [[ -n "$container" ]]; then
+        local cw_path
+        cw_path=$(docker inspect "$container" 2>/dev/null \
+            --format='{{range .Mounts}}{{.Source}}{{"\t"}}{{.Destination}}{{"\n"}}{{end}}' \
+            | grep -i "certwardenclient\|certwarden" | head -1 | awk '{print $1}')
+        if [[ -n "$cw_path" ]]; then echo "certwarden:${cw_path}"; return 0; fi
+        # Let's Encrypt смонтирован?
+        local le_host
+        le_host=$(docker inspect "$container" 2>/dev/null \
+            --format='{{range .Mounts}}{{if eq .Destination "/etc/letsencrypt"}}{{.Source}}{{end}}{{end}}' \
+            | head -1)
+        [[ -n "$le_host" ]] && echo "letsencrypt:${le_host}" && return 0
+    fi
+    # Let's Encrypt на хосте?
+    [[ -d /etc/letsencrypt/live ]] && echo "letsencrypt:/etc/letsencrypt" && return 0
+    # Наш /etc/reshala-bedolaga/certs?
+    [[ -f /etc/reshala-bedolaga/certs/fullchain.pem ]] && echo "reshala:/etc/reshala-bedolaga/certs" && return 0
+    echo "none"
+}
+
+# Находит конфиг-директорию хостового nginx (для sites-available → sites-enabled)
 _vgw_find_nginx_conf_dir() {
-    for d in /etc/nginx/sites-enabled /etc/nginx/conf.d /etc/nginx/vhosts.d; do
+    if [[ -d /etc/nginx/sites-available ]]; then echo "/etc/nginx/sites-available"; return; fi
+    for d in /etc/nginx/conf.d /etc/nginx/vhosts.d; do
         [[ -d "$d" ]] && echo "$d" && return
     done
     echo "/etc/nginx/conf.d"
+}
+
+# Генерирует nginx server-block для proxy_pass на наш gateway
+# Аргументы: public_domain gateway_port ssl_cert_path ssl_key_path
+_vgw_nginx_generate_conf() {
+    local domain="$1" gw_port="$2" cert="${3:-}" key="${4:-}"
+    local ssl_block
+    if [[ -n "$cert" && -f "$cert" ]]; then
+        ssl_block="    ssl_certificate     ${cert};"$'\n'"    ssl_certificate_key ${key};"
+    else
+        ssl_block="    # ⚠️  Сертификат не найден. Установите certbot и выпустите сертификат!
+    # certbot --nginx -d ${domain}
+    # Временно используем snakeoil:
+    ssl_certificate     /etc/ssl/certs/ssl-cert-snakeoil.pem;
+    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;"
+    fi
+    cat <<NGINXCONF
+# ================================================================
+# BEDOLAGA LANDING GATEWAY — proxy_pass конфиг
+# Домен:     ${domain}
+# Gateway:   127.0.0.1:${gw_port}
+# Создан:    $(date '+%Y-%m-%d %H:%M:%S')
+# ================================================================
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme-challenge;
+        try_files \$uri =404;
+    }
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${domain};
+
+${ssl_block}
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    location / {
+        proxy_pass https://127.0.0.1:${gw_port};
+        proxy_http_version 1.1;
+        proxy_ssl_verify off;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+}
+NGINXCONF
+}
+
+# Сохраняет данные об инжектированном nginx-конфиге в /etc/reshala-bedolaga/
+_vgw_nginx_injection_save() {
+    local nginx_type="$1" conf_file="$2" domain="$3"
+    mkdir -p "${_VGW_PERSIST_DIR}" 2>/dev/null || true
+    cat > "${_VGW_PERSIST_DIR}/nginx_injection.env" <<EOF
+NGINX_TYPE=${nginx_type}
+CONF_FILE=${conf_file}
+DOMAIN=${domain}
+SAVED_AT=$(date '+%Y-%m-%d %H:%M:%S')
+EOF
+}
+
+# Показывает план действий и спрашивает y/n
+# Аргументы: nginx_type container confd_path cert_source domain gateway_port
+_vgw_detect_show_plan() {
+    local ntype="$1" cname="${2:-}" cpath="${3:-}" csrc="${4:-none}" domain="$5" gport="$6"
+    local W="$C_YELLOW" C="$C_CYAN" G="$C_GREEN" R="$C_RED" B="$C_BOLD" E="$C_RESET"
+
+    echo ""
+    echo -e "  ${C}╔══════════════════════════════════════════════════════════════╗${E}"
+    echo -e "  ${C}║${E}  🔍  ${B}Обнаружено окружение${E}                                    ${C}║${E}"
+    echo -e "  ${C}╠══════════════════════════════════════════════════════════════╣${E}"
+
+    case "$ntype" in
+        free)
+            echo -e "  ${C}║${E}  Тип:        ${G}Порты свободны — прямой запуск${E}"
+            echo -e "  ${C}║${E}  Стратегия:  edge-nginx возьмёт 80/443 напрямую"
+            ;;
+        host:nginx)
+            echo -e "  ${C}║${E}  Тип:        ${W}Хостовый nginx (systemd)${E}"
+            local cdir; cdir=$(_vgw_find_nginx_conf_dir)
+            echo -e "  ${C}║${E}  conf-dir:   ${G}${cdir}${E}"
+            echo -e "  ${C}║${E}  Gateway:    порт ${G}${gport}${E} (не 443)"
+            ;;
+        docker:conf.d:*)
+            echo -e "  ${C}║${E}  Тип:        ${W}Docker nginx с модульным conf.d${E}"
+            echo -e "  ${C}║${E}  Контейнер:  ${G}${cname}${E}"
+            echo -e "  ${C}║${E}  conf.d:     ${G}${cpath}${E}"
+            echo -e "  ${C}║${E}  Gateway:    порт ${G}${gport}${E}"
+            ;;
+        docker:hostnet:*)
+            echo -e "  ${C}║${E}  Тип:        ${R}Docker nginx (network_mode:host, unix-сокеты)${E}"
+            echo -e "  ${C}║${E}  Контейнер:  ${G}${cname}${E}"
+            echo -e "  ${C}║${E}  ${W}Авто-инжект невозможен — потребуется ручная правка${E}"
+            ;;
+        docker:nginx:*)
+            echo -e "  ${C}║${E}  Тип:        ${W}Docker nginx (прочий)${E}"
+            echo -e "  ${C}║${E}  Контейнер:  ${G}${cname}${E}"
+            ;;
+        *)
+            echo -e "  ${C}║${E}  Тип:        ${R}Неизвестный сервис занимает порты${E}"
+            ;;
+    esac
+
+    echo -e "  ${C}║${E}  SSL:        ${G}${csrc%%:*}${E}"
+    echo -e "  ${C}╠══════════════════════════════════════════════════════════════╣${E}"
+    echo -e "  ${C}║${E}  📋  ${B}План действий:${E}"
+
+    case "$ntype" in
+        free)
+            echo -e "  ${C}║${E}  1. Запустить edge-nginx контейнер на 80/443"
+            echo -e "  ${C}║${E}  2. Выпустить Let's Encrypt для ${G}${domain}${E}"
+            ;;
+        host:nginx)
+            local cdir; cdir=$(_vgw_find_nginx_conf_dir)
+            echo -e "  ${C}║${E}  1. Создать ${G}${cdir}/${domain}.conf${E}"
+            echo -e "  ${C}║${E}  2. nginx -t && systemctl reload nginx"
+            echo -e "  ${C}║${E}  3. Gateway запустится на порту ${G}${gport}${E}"
+            ;;
+        docker:conf.d:*)
+            echo -e "  ${C}║${E}  1. Создать ${G}${cpath}/80-bedolaga.conf${E}"
+            echo -e "  ${C}║${E}  2. docker exec ${cname} nginx -t"
+            echo -e "  ${C}║${E}  3. docker exec ${cname} nginx -s reload"
+            echo -e "  ${C}║${E}  4. Gateway на порту ${G}${gport}${E}"
+            ;;
+        *)
+            echo -e "  ${C}║${E}  Требуется ручная настройка."
+            echo -e "  ${C}║${E}  Будет показана подробная инструкция."
+            ;;
+    esac
+
+    echo -e "  ${C}╚══════════════════════════════════════════════════════════════╝${E}"
+    echo ""
+    ask_yes_no "Выполнить автоматически? (y/n)" "y"
+}
+
+# Авто-инжект nginx конфига. Возвращает 0 при успехе, 1 при ошибке.
+_vgw_nginx_inject_auto() {
+    local ntype="$1" cname="${2:-}" cpath="${3:-}" csrc="${4:-none}" domain="$5" gport="$6"
+    local cert="" key=""
+
+    # Определяем сертификаты
+    local csrc_type="${csrc%%:*}" csrc_path="${csrc#*:}"
+    if [[ "$csrc_type" != "none" && -n "$csrc_path" ]]; then
+        cert="${csrc_path}/fullchain.pem"
+        key="${csrc_path}/privkey.pem"
+        [[ -f "$cert" ]] || cert=""
+        [[ -f "$key" ]]  || key=""
+    fi
+
+    case "$ntype" in
+        host:nginx)
+            local cdir conf_file
+            cdir=$(_vgw_find_nginx_conf_dir)
+            conf_file="${cdir}/${domain}.conf"
+            info "Создаю ${conf_file}..."
+            _vgw_nginx_generate_conf "$domain" "$gport" "$cert" "$key" > "$conf_file" || {
+                printf_error "Не удалось создать ${conf_file}"; return 1
+            }
+            # Если sites-available → создаём симлинк в sites-enabled
+            if [[ "$cdir" == "/etc/nginx/sites-available" && -d /etc/nginx/sites-enabled ]]; then
+                ln -sf "$conf_file" "/etc/nginx/sites-enabled/${domain}.conf" 2>/dev/null || true
+            fi
+            if ! nginx -t 2>/dev/null; then
+                printf_error "nginx -t ОШИБКА! Откатываю..."
+                rm -f "$conf_file" "/etc/nginx/sites-enabled/${domain}.conf"
+                return 1
+            fi
+            systemctl reload nginx && ok "Хостовый nginx перезагружен!" || return 1
+            _vgw_nginx_injection_save "host:nginx" "$conf_file" "$domain"
+            ;;
+
+        docker:conf.d:*)
+            local conf_host="${cpath}/80-bedolaga.conf"
+            info "Создаю ${conf_host}..."
+            _vgw_nginx_generate_conf "$domain" "$gport" "$cert" "$key" > "$conf_host" || {
+                printf_error "Не удалось создать ${conf_host}"; return 1
+            }
+            if ! docker exec "$cname" nginx -t 2>/dev/null; then
+                printf_error "nginx -t в контейнере ОШИБКА! Откатываю..."
+                rm -f "$conf_host"
+                return 1
+            fi
+            docker exec "$cname" nginx -s reload && ok "Docker nginx (${cname}) перезагружен!" || return 1
+            _vgw_nginx_injection_save "docker:conf.d" "$conf_host" "$domain"
+            ;;
+
+        docker:nginx:*)
+            # Инжектируем через docker cp
+            local tmp_conf="/tmp/_bedolaga_${domain}.conf"
+            _vgw_nginx_generate_conf "$domain" "$gport" "$cert" "$key" > "$tmp_conf"
+            docker cp "$tmp_conf" "${cname}:/etc/nginx/conf.d/80-bedolaga.conf" || return 1
+            rm -f "$tmp_conf"
+            docker exec "$cname" nginx -t && docker exec "$cname" nginx -s reload || return 1
+            ok "Docker nginx (${cname}) перезагружен!"
+            _vgw_nginx_injection_save "docker:nginx" "/etc/nginx/conf.d/80-bedolaga.conf" "$domain"
+            ;;
+
+        *)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# Генерирует точную инструкцию для ручной установки под любой тип nginx
+_vgw_nginx_manual_guide() {
+    local ntype="$1" cname="${2:-}" cpath="${3:-}" domain="$4" gport="$5"
+    local W="$C_YELLOW" C="$C_CYAN" G="$C_GREEN" R="$C_RED" B="$C_BOLD" E="$C_RESET"
+    local conf_content
+    conf_content=$(_vgw_nginx_generate_conf "$domain" "$gport")
+
+    echo ""
+    echo -e "  ${W}${B}╔══════════════════════════════════════════════════════════════╗${E}"
+    echo -e "  ${W}${B}║${E}  📋  ${B}Инструкция: ручная установка nginx${E}"
+    echo -e "  ${W}${B}╚══════════════════════════════════════════════════════════════╝${E}"
+    echo ""
+
+    case "$ntype" in
+        host:nginx)
+            local cdir; cdir=$(_vgw_find_nginx_conf_dir)
+            echo -e "  ${B}Шаг 1${E}: Создайте файл конфига"
+            echo -e "  ${G}  nano ${cdir}/${domain}.conf${E}"
+            echo ""
+            echo -e "  ${B}Шаг 2${E}: Вставьте содержимое:"
+            echo "  ────────────────────────────────────────────────────"
+            echo "$conf_content" | sed 's/^/  /'
+            echo "  ────────────────────────────────────────────────────"
+            echo ""
+            if [[ "$cdir" == "/etc/nginx/sites-available" ]]; then
+                echo -e "  ${B}Шаг 3${E}: Активируйте сайт"
+                echo -e "  ${G}  ln -s ${cdir}/${domain}.conf /etc/nginx/sites-enabled/${E}"
+                echo ""
+            fi
+            echo -e "  ${B}Шаг 4${E}: Получите сертификат"
+            echo -e "  ${G}  certbot --nginx -d ${domain}${E}"
+            echo ""
+            echo -e "  ${B}Шаг 5${E}: Проверьте и примените"
+            echo -e "  ${G}  nginx -t && systemctl reload nginx${E}"
+            ;;
+
+        docker:conf.d:*)
+            echo -e "  ${B}Шаг 1${E}: Создайте файл в папке conf.d"
+            echo -e "  ${G}  nano ${cpath}/80-bedolaga.conf${E}"
+            echo ""
+            echo -e "  ${B}Шаг 2${E}: Вставьте содержимое:"
+            echo "  ────────────────────────────────────────────────────"
+            echo "$conf_content" | sed 's/^/  /'
+            echo "  ────────────────────────────────────────────────────"
+            echo ""
+            echo -e "  ${B}Шаг 3${E}: Проверьте и перезагрузите nginx"
+            echo -e "  ${G}  docker exec ${cname} nginx -t${E}"
+            echo -e "  ${G}  docker exec ${cname} nginx -s reload${E}"
+            ;;
+
+        docker:hostnet:*)
+            local cfgpath="${cpath}"
+            echo -e "  ${R}${B}⚠️  Этот nginx использует unix-сокеты (network_mode:host).${E}"
+            echo -e "  ${R}  Авто-инжект невозможен. Требуется ручная правка nginx.conf.${E}"
+            echo ""
+            echo -e "  ${B}Шаг 1${E}: Откройте конфиг"
+            echo -e "  ${G}  nano ${cfgpath}${E}"
+            echo ""
+            echo -e "  ${B}Шаг 2${E}: В блоке ${B}http {}${E} перед закрывающей } добавьте:"
+            echo "  ────────────────────────────────────────────────────"
+            echo "$conf_content" | sed 's/^/  /'
+            echo "  ────────────────────────────────────────────────────"
+            echo ""
+            echo -e "  ${B}Шаг 3${E}: Примените"
+            echo -e "  ${G}  docker exec ${cname} nginx -t${E}"
+            echo -e "  ${G}  docker exec ${cname} nginx -s reload${E}"
+            ;;
+
+        *)
+            echo -e "  Тип nginx не определён. Готовый конфиг для ручной установки:"
+            echo ""
+            echo "$conf_content" | sed 's/^/  /'
+            echo ""
+            echo -e "  Вставьте в директорию nginx конфигов вашего сервера."
+            echo -e "  После вставки: ${G}nginx -t && nginx reload${E}"
+            ;;
+    esac
+
+    echo ""
+    echo -e "  ${B}Gateway запустится на порту ${G}${gport}${E}"
+    echo ""
 }
 
 # Генерирует и показывает готовый nginx proxy_pass конфиг
@@ -864,20 +1240,98 @@ vgw_install_wizard(){
     fi
 
     _vgw_prompt_and_apply_common install
-    # После установки — открываем UFW порты если нужно
+    # После установки — читаем итоговые порты
     local cfg_file="$(_vgw_cfg_file)"
     local py_bin; py_bin="$(_vgw_python)"
     local http_port https_port
     http_port=$(CFG_FILE="$cfg_file" "$py_bin" -c "import os,yaml; from pathlib import Path; c=yaml.safe_load(Path(os.environ['CFG_FILE']).read_text('utf-8')) or {}; print(c.get('edge',{}).get('http_port',80))" 2>/dev/null || echo "80")
     https_port=$(CFG_FILE="$cfg_file" "$py_bin" -c "import os,yaml; from pathlib import Path; c=yaml.safe_load(Path(os.environ['CFG_FILE']).read_text('utf-8')) or {}; print(c.get('edge',{}).get('https_port',443))" 2>/dev/null || echo "443")
     _vgw_ensure_ufw_ports "$http_port" "$https_port"
-    # Показываем статус лендинга и уведомление о мерчанте
+
+    # ── УМНАЯ NGINX ИНТЕГРАЦИЯ ────────────────────────────────────
+    local public_domain
+    public_domain=$(_vgw_read_quick_field public_domain 2>/dev/null || echo "")
+
+    if [[ -n "$public_domain" && "$public_domain" != "vpn.example.com" ]]; then
+        local nginx_type cname="" cpath="" csrc
+        nginx_type=$(_vgw_smart_nginx_detect "$http_port" "$https_port")
+
+        # Разбираем компоненты строки типа
+        case "$nginx_type" in
+            docker:conf.d:*:*)
+                cname=$(echo "$nginx_type" | cut -d: -f3)
+                cpath=$(echo "$nginx_type" | cut -d: -f4-)
+                ;;
+            docker:hostnet:*:*|docker:nginx:*)
+                cname=$(echo "$nginx_type" | cut -d: -f3)
+                cpath=$(echo "$nginx_type" | cut -d: -f4-)
+                ;;
+        esac
+
+        csrc=$(_vgw_detect_cert_source "$cname")
+
+        case "$nginx_type" in
+            free|our_container)
+                # edge-nginx сам занимает 80/443 — никаких инжектов не нужно
+                ;;
+            docker:hostnet:*|unknown)
+                # Авто-инжект невозможен — сразу показываем инструкцию
+                echo ""
+                warn "Авто-инжект nginx невозможен. Показываю инструкцию..."
+                _vgw_nginx_manual_guide "$nginx_type" "$cname" "$cpath" "$public_domain" "$https_port"
+                ;;
+            *)
+                # Для host:nginx, docker:conf.d:*, docker:nginx:* — показываем план
+                if _vgw_detect_show_plan "$nginx_type" "$cname" "$cpath" "$csrc" "$public_domain" "$https_port"; then
+                    # Пользователь выбрал y
+                    if ! _vgw_nginx_inject_auto "$nginx_type" "$cname" "$cpath" "$csrc" "$public_domain" "$https_port"; then
+                        warn "Авто-инжект не удался. Показываю инструкцию для ручной установки..."
+                        _vgw_nginx_manual_guide "$nginx_type" "$cname" "$cpath" "$public_domain" "$https_port"
+                    else
+                        ok "Nginx успешно настроен!"
+                    fi
+                else
+                    # Пользователь выбрал n — показываем инструкцию
+                    _vgw_nginx_manual_guide "$nginx_type" "$cname" "$cpath" "$public_domain" "$https_port"
+                fi
+                ;;
+        esac
+    fi
+
+    # Показываем финальный статус
     _vgw_show_landing_status
     _vgw_warn_merchant_return
 }
+
 vgw_reconfigure_wizard(){
     _vgw_preflight_check || return 1
     _vgw_prompt_and_apply_common reconfigure
+    # После смены параметров — обновляем nginx конфиг если инжект был ранее
+    local persist_inj="${_VGW_PERSIST_DIR}/nginx_injection.env"
+    if [[ -f "$persist_inj" ]]; then
+        # Читаем сохранённый тип инжекта
+        local saved_type saved_file saved_domain
+        saved_type=$(grep '^NGINX_TYPE=' "$persist_inj" | cut -d= -f2-)
+        saved_file=$(grep '^CONF_FILE=' "$persist_inj" | cut -d= -f2-)
+        saved_domain=$(grep '^DOMAIN=' "$persist_inj" | cut -d= -f2-)
+        local new_domain; new_domain=$(_vgw_read_quick_field public_domain 2>/dev/null || echo "")
+        if [[ -n "$saved_type" && -n "$new_domain" ]]; then
+            local cfg_file="$(_vgw_cfg_file)"
+            local py_bin; py_bin="$(_vgw_python)"
+            local https_port
+            https_port=$(CFG_FILE="$cfg_file" "$py_bin" -c "import os,yaml; from pathlib import Path; c=yaml.safe_load(Path(os.environ['CFG_FILE']).read_text('utf-8')) or {}; print(c.get('edge',{}).get('https_port',443))" 2>/dev/null || echo "443")
+            info "Домен изменён — обновляю nginx конфиг..."
+            # Получаем cname и cpath из сохранённого файла
+            local cname="" cpath=""
+            case "$saved_type" in
+                docker:conf.d) cpath="$(dirname "$saved_file")" ;;
+                docker:nginx)  cname="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i nginx | grep -v vpn-edge-nginx | head -1)" ;;
+            esac
+            local csrc; csrc=$(_vgw_detect_cert_source "$cname")
+            _vgw_nginx_inject_auto "${saved_type}" "$cname" "$cpath" "$csrc" "$new_domain" "$https_port" || true
+        fi
+    fi
+    _vgw_show_landing_status
 }
 vgw_run(){ _vgw_run_action run; }
 vgw_test(){ _vgw_run_action test; }
@@ -900,10 +1354,62 @@ vgw_status_diagnostics() {
     ( cd "$project_dir"; $dc_cmd -f docker-compose.yml -f docker-compose.edge.yml logs --tail=120 edge-nginx || true; echo ""; $dc_cmd -f docker-compose.yml -f docker-compose.edge.yml logs --tail=120 vpn-gateway || true )
 }
 
-vgw_certs_full(){ _vgw_run_action certs-ensure || return 1; _vgw_run_action certs-renew || return 1; _vgw_run_action certs-cron; }
+vgw_certs_full(){ _vgw_run_action certs-ensure || return 1; _vgw_run_action certs-renew || return 1; _vgw_run_action certs-cron; _vgw_certs_save_persistent; }
 
-vgw_uninstall_execute_confirmed(){ printf_critical_warning "ОПАСНО"; if ask_yes_no "Подтверждаешь удаление контейнеров gateway? (y/n)" "n"; then _vgw_run_action uninstall --non-interactive --yes; fi; }
-vgw_uninstall_purge_confirmed(){ printf_critical_warning "ОЧЕНЬ ОПАСНО"; if ask_yes_no "Подтверждаешь PURGE gateway-данных? (y/n)" "n"; then _vgw_run_action uninstall-purge --non-interactive --yes-purge; fi; }
+_vgw_rollback_nginx_injection() {
+    local persist_inj="${_VGW_PERSIST_DIR}/nginx_injection.env"
+    if [[ -f "$persist_inj" ]]; then
+        local saved_type saved_file saved_domain
+        saved_type=$(grep '^NGINX_TYPE=' "$persist_inj" | cut -d= -f2-)
+        saved_file=$(grep '^CONF_FILE=' "$persist_inj" | cut -d= -f2-)
+        saved_domain=$(grep '^DOMAIN=' "$persist_inj" | cut -d= -f2-)
+        
+        info "Обнаружен внедрённый конфиг Nginx (${saved_type}): ${saved_file}"
+        if ask_yes_no "Удалить внедрённый конфиг из основного Nginx? (y/n)" "y"; then
+            case "$saved_type" in
+                host:nginx)
+                    rm -f "$saved_file" "/etc/nginx/sites-enabled/${saved_domain}.conf" 2>/dev/null
+                    if nginx -t 2>/dev/null; then systemctl reload nginx 2>/dev/null || true; fi
+                    ok "Конфиг удалён из хостового nginx"
+                    ;;
+                docker:conf.d)
+                    rm -f "$saved_file" 2>/dev/null
+                    # Ищем контейнер с nginx
+                    local cname; cname=$(docker ps --format '{{.Names}}' | grep -i nginx | grep -v vpn-edge-nginx | head -1)
+                    if [[ -n "$cname" ]]; then
+                        if docker exec "$cname" nginx -t 2>/dev/null; then docker exec "$cname" nginx -s reload 2>/dev/null || true; fi
+                        ok "Конфиг удалён из docker nginx (${cname})"
+                    fi
+                    ;;
+                docker:nginx)
+                    local cname; cname=$(docker ps --format '{{.Names}}' | grep -i nginx | grep -v vpn-edge-nginx | head -1)
+                    if [[ -n "$cname" ]]; then
+                        docker exec "$cname" rm -f "$saved_file" 2>/dev/null
+                        if docker exec "$cname" nginx -t 2>/dev/null; then docker exec "$cname" nginx -s reload 2>/dev/null || true; fi
+                        ok "Конфиг удалён из docker nginx (${cname})"
+                    fi
+                    ;;
+            esac
+            rm -f "$persist_inj"
+        fi
+    fi
+}
+
+vgw_uninstall_execute_confirmed(){ 
+    printf_critical_warning "ОПАСНО"
+    if ask_yes_no "Подтверждаешь удаление контейнеров gateway? (y/n)" "n"; then 
+        _vgw_run_action uninstall --non-interactive --yes
+        _vgw_rollback_nginx_injection
+    fi
+}
+vgw_uninstall_purge_confirmed(){ 
+    printf_critical_warning "ОЧЕНЬ ОПАСНО"
+    if ask_yes_no "Подтверждаешь PURGE gateway-данных? (y/n)" "n"; then 
+        _vgw_run_action uninstall-purge --non-interactive --yes-purge
+        _vgw_rollback_nginx_injection
+        rm -rf "${_VGW_PERSIST_DIR}" 2>/dev/null || true
+    fi
+}
 
 _vgw_read_hide_payment_return() {
     local cfg_file="$(_vgw_cfg_file)"; [[ -f "$cfg_file" ]] || { echo unknown; return 0; }
