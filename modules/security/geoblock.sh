@@ -227,6 +227,27 @@ _geo_show_status() {
     print_separator
 }
 
+_geo_format_column_item() {
+    local chk="$1"
+    local idx="$2"
+    local code="$3"
+    local name="$4"
+    local col_width="$5"
+    
+    local idx_str
+    idx_str=$(printf "%2d)" "$idx")
+    
+    local text="${chk}  ${idx_str} ${C_CYAN}${code}${C_RESET} ${C_WHITE}${name}${C_RESET}"
+    local vis_len
+    vis_len=$(_get_visible_length "$text")
+    
+    local spaces_needed=$((col_width - vis_len))
+    local spaces=""
+    if ((spaces_needed > 0)); then
+        spaces=$(printf '%*s' "$spaces_needed" "")
+    fi
+    echo -e "${text}${spaces}"
+}
 
 _geo_manage_countries() {
     local sorted_codes=()
@@ -254,7 +275,7 @@ _geo_manage_countries() {
     fi
 
     local search_query=""
-    local page_size=15
+    local page_size=30
     local current_page=0
 
     while true; do
@@ -297,31 +318,60 @@ _geo_manage_countries() {
         local page_end=$((page_start + page_size - 1))
         [[ $page_end -ge $total_items ]] && page_end=$((total_items - 1))
 
-        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════╗${C_RESET}"
-        _geo_print_card_header "📋 УПРАВЛЕНИЕ СПИСКОМ СТРАН"
-        _geo_print_card_header "Показано $((page_start+1))-$((page_end+1)) из $total_items"
-        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "  ${C_CYAN}╔══════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}               ${C_WHITE}📋 УПРАВЛЕНИЕ СПИСКОМ СТРАН${C_RESET}"
+        echo -e "  ${C_CYAN}║${C_RESET}                  ${C_WHITE}Показано $((page_start+1))-$((page_end+1)) из $total_items${C_RESET}"
+        echo -e "  ${C_CYAN}╠══════════════════════════════════════════════════════════${C_RESET}"
+
         if [[ $total_items -gt 0 ]]; then
-            local display_idx=1
-            for ((i=page_start; i<=page_end; i++)); do
-                local code="${filtered_codes[$i]}"
-                local name=""
-                if [[ "$code" =~ ^[A-Z]{2}$ && -v GEO_ALL_COUNTRIES[$code] ]]; then
-                    name="${GEO_ALL_COUNTRIES[$code]}"
+            local page_items_count=$((page_end - page_start + 1))
+            local rows_count=$(( (page_items_count + 1) / 2 ))
+            
+            for ((r=0; r<rows_count; r++)); do
+                local left_idx=$((page_start + r))
+                local right_idx=$((page_start + rows_count + r))
+                
+                # Left Column
+                local left_code="${filtered_codes[$left_idx]}"
+                local left_name=""
+                if [[ "$left_code" =~ ^[A-Z]{2}$ && -v GEO_ALL_COUNTRIES[$left_code] ]]; then
+                    left_name="${GEO_ALL_COUNTRIES[$left_code]}"
                 else
-                    name="?"
+                    left_name="?"
                 fi
-                local chk="[ ]"
-                if [[ -n "${selected_countries[$code]:-}" ]]; then
-                    chk="[${C_GREEN}✓${C_RESET}]"
+                local left_chk="[ ]"
+                if [[ -n "${selected_countries[$left_code]:-}" ]]; then
+                    left_chk="[${C_GREEN}✓${C_RESET}]"
                 fi
-                _geo_print_card_row "  ${chk}  ${C_WHITE}${display_idx})${C_RESET} ${C_CYAN}${code}${C_RESET}" "${C_WHITE}${name}${C_RESET}"
-                ((display_idx++))
+                local left_display_idx=$((r + 1))
+                local left_str
+                left_str=$(_geo_format_column_item "$left_chk" "$left_display_idx" "$left_code" "$left_name" 36)
+                
+                # Right Column
+                local right_str=""
+                if [[ $right_idx -le $page_end ]]; then
+                    local right_code="${filtered_codes[$right_idx]}"
+                    local right_name=""
+                    if [[ "$right_code" =~ ^[A-Z]{2}$ && -v GEO_ALL_COUNTRIES[$right_code] ]]; then
+                        right_name="${GEO_ALL_COUNTRIES[$right_code]}"
+                    else
+                        right_name="?"
+                    fi
+                    local right_chk="[ ]"
+                    if [[ -n "${selected_countries[$right_code]:-}" ]]; then
+                        right_chk="[${C_GREEN}✓${C_RESET}]"
+                    fi
+                    local right_display_idx=$((rows_count + r + 1))
+                    right_str=$(_geo_format_column_item "$right_chk" "$right_display_idx" "$right_code" "$right_name" 0)
+                fi
+                
+                echo -e "  ${C_CYAN}║${C_RESET}    ${left_str}${right_str}"
             done
         else
-            _geo_print_card_row "  ${C_RED}Страны по вашему запросу не найдены.${C_RESET}" ""
+            echo -e "  ${C_CYAN}║${C_RESET}    ${C_RED}Страны по вашему запросу не найдены.${C_RESET}"
         fi
-        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+
+        echo -e "  ${C_CYAN}╚══════════════════════════════════════════════════════════${C_RESET}"
 
         print_separator
         local total_selected=${#selected_countries[@]}
@@ -332,7 +382,7 @@ _geo_manage_countries() {
         print_separator
         echo ""
         
-        printf_menu_option "1-15 (или 1 3 5)" "Переключить страну(ы) на странице"
+        printf_menu_option "1-30 (или 1 3 5)" "Переключить страну(ы) на странице"
         printf_menu_option "RU, CN (или RU CN)" "Переключить страну(ы) напрямую по ISO-коду"
         printf_menu_option "n / p" "Следующая / Предыдущая страница"
         printf_menu_option "s" "Поиск по названию или коду"
