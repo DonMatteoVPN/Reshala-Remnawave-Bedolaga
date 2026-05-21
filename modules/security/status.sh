@@ -65,9 +65,9 @@ show_full_security_status() {
 
     # --- Geo-Block ---
     print_section_title "Geo-Block"
-    if command -v ipset &>/dev/null && ipset list reshala_geoblock &>/dev/null 2>&1; then
+    if command -v ipset &>/dev/null && ipset list reshala_geoblock -terse &>/dev/null 2>&1; then
         local geo_count
-        geo_count=$(ipset list reshala_geoblock 2>/dev/null | grep -c "^[0-9]" || echo "0")
+        geo_count=$(ipset list reshala_geoblock -terse 2>/dev/null | grep -Fi "Number of entries:" | awk '{print $4}' || echo "0")
         print_key_value "Статус" "${C_GREEN}Активен${C_RESET}" "$LABEL_WIDTH"
         print_key_value "Заблокировано подсетей" "${geo_count}" "$LABEL_WIDTH"
     else

@@ -766,8 +766,9 @@ _f2b_detect_nginx_log() {
     local log_type="$1" # "access" or "error"
     F2B_SELECTED_LOG=""
     local found_logs=()
+    local selected_flags=()
 
-    # Стандартные пути
+    # 1. Стандартные пути
     local standard_paths=(
         "/var/log/nginx/access.log"
         "/var/log/nginx/error.log"
@@ -775,19 +776,19 @@ _f2b_detect_nginx_log() {
         "/var/log/nginx/error_stream.log"
     )
     for p in "${standard_paths[@]}"; do
-        if [[ -f "$p" ]] && [[ "$p" == *"$log_type"* ]]; then
+        if [[ -f "$p" ]]; then
             found_logs+=("$p")
         fi
     done
 
-    # Docker volumes (проверяем все контейнеры, включая остановленные)
-    local docker_paths
+    # 2. Docker volumes (проверяем все контейнеры, включая остановленные)
     if command -v docker &>/dev/null; then
+        local docker_paths
         mapfile -t docker_paths < <(docker inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\n"}}{{end}}{{end}}' $(docker ps -a -q) 2>/dev/null | grep -i "log\|nginx" | sort -u)
         for dp in "${docker_paths[@]}"; do
             if [[ -d "$dp" ]]; then
                 local d_logs=()
-                mapfile -t d_logs < <(find "$dp" -type f \( -name "*${log_type}*" -o -name "${log_type}.log" \) 2>/dev/null | head -5)
+                mapfile -t d_logs < <(find "$dp" -maxdepth 3 -type f -name "*.log" 2>/dev/null | head -10)
                 for dl in "${d_logs[@]}"; do
                     if [[ ! " ${found_logs[*]} " =~ " ${dl} " ]]; then
                         found_logs+=("$dl")
@@ -797,54 +798,142 @@ _f2b_detect_nginx_log() {
         done
     fi
 
-    # Дополнительный умный поиск по всей системе (для случаев, когда контейнер остановлен или пути кастомные)
+    # 3. Умный поиск по всей системе (включая кастомные и stream логи)
     local extra_logs=()
-    mapfile -t extra_logs < <(find /var/log /opt /home -type f \( -name "*${log_type}*.log" -o -name "${log_type}.log" \) \( -path "*nginx*" -o -path "*reshala*" -o -path "*remnawave*" -o -path "*proxy*" \) 2>/dev/null | head -15)
+    mapfile -t extra_logs < <(find /var/log /opt /home -maxdepth 4 -type f -name "*.log" \( -path "*nginx*" -o -path "*reshala*" -o -path "*remnawave*" -o -path "*proxy*" \) 2>/dev/null | head -25)
     for el in "${extra_logs[@]}"; do
         if [[ ! " ${found_logs[*]} " =~ " ${el} " ]]; then
             found_logs+=("$el")
         fi
     done
 
-    if [[ ${#found_logs[@]} -gt 0 ]]; then
+    # Если логи уже настроены в джейле, парсим их и добавляем в список
+    if [[ -n "$current_log" && "$current_log" != "Не задан" && "$current_log" != "systemd" ]]; then
+        for cl in $current_log; do
+            if [[ ! " ${found_logs[*]} " =~ " ${cl} " ]]; then
+                found_logs+=("$cl")
+            fi
+        done
+    fi
+
+    # Инициализация чекбоксов
+    for i in "${!found_logs[@]}"; do
+        local fpath="${found_logs[$i]}"
+        local is_sel="false"
+        if [[ -n "$current_log" && "$current_log" != "Не задан" && "$current_log" != "systemd" ]]; then
+            if [[ " $current_log " == *" $fpath "* ]]; then
+                is_sel="true"
+            fi
+        elif [[ "$fpath" == *"$log_type"* ]]; then
+            is_sel="true"
+        fi
+        selected_flags+=("$is_sel")
+    done
+
+    while true; do
+        clear
+        menu_header "📂 Выбор лог-файлов Nginx"
         info "Подсказка по выбору лог-файла:"
-        printf_description " • Если Nginx работает на сервере: ${C_YELLOW}/var/log/nginx/${log_type}.log${C_RESET}"
-        printf_description " • Если Nginx в Docker (например, NPM): ищите пути вида ${C_YELLOW}/opt/.../data/logs/${C_RESET} или ${C_YELLOW}/var/lib/docker/volumes/...${C_RESET}"
-        printf_description " Важно: Fail2Ban работает на хосте, поэтому путь должен быть доступен с хост-системы!"
+        printf_description " • Рекомендуемый тип лога: ${C_YELLOW}$log_type${C_RESET}"
+        printf_description " • Вы можете выбрать ${C_GREEN}несколько${C_RESET} лог-файлов одновременно!"
+        printf_description " • Перед выбором вы можете просмотреть содержимое любого лога."
+        print_separator
         echo ""
 
-        ok "Найдены подходящие логи Nginx (${#found_logs[@]}):"
-        local i=1
-        for log_file in "${found_logs[@]}"; do
-            local size
-            size=$(du -h "$log_file" 2>/dev/null | awk '{print $1}')
-            printf_description "  ${C_WHITE}${i})${C_RESET} ${log_file} ${C_GRAY}(${size:-?})${C_RESET}"
-            ((i++))
-        done
+        if [[ ${#found_logs[@]} -gt 0 ]]; then
+            ok "Найденные файлы логов (${#found_logs[@]}):"
+            for i in "${!found_logs[@]}"; do
+                local log_file="${found_logs[$i]}"
+                local size
+                size=$(du -h "$log_file" 2>/dev/null | awk '{print $1}')
+                local chk="[ ]"
+                if [[ "${selected_flags[$i]}" == "true" ]]; then
+                    chk="[${C_GREEN}✓${C_RESET}]"
+                else
+                    chk="[ ]"
+                fi
+                
+                # Подсвечиваем файлы, соответствующие ожидаемому типу
+                local hl_path="$log_file"
+                if [[ "$log_file" == *"$log_type"* ]]; then
+                    hl_path="${C_WHITE}$log_file${C_RESET}"
+                else
+                    hl_path="${C_GRAY}$log_file${C_RESET}"
+                fi
+
+                printf_description "  $chk ${C_WHITE}$((i+1)))${C_RESET} $hl_path ${C_GRAY}(${size:-?})${C_RESET}"
+            done
+        else
+            warn "Логи Nginx не найдены автоматически."
+        fi
+
         echo ""
         printf_menu_option "m" "Ввести путь вручную"
-        echo ""
-
-        local choice
-        choice=$(safe_read "Выберите файл лога" "1") || return 1
-
-        if [[ "$choice" == "m" || "$choice" == "M" ]]; then
-            F2B_SELECTED_LOG=$(ask_non_empty "Введите полный путь к файлу лога") || return 1
-        elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#found_logs[@]} ]]; then
-            F2B_SELECTED_LOG="${found_logs[$((choice-1))]}"
-        else
-            err "Неверный выбор."
-            return 1
+        if [[ ${#found_logs[@]} -gt 0 ]]; then
+            printf_menu_option "ok" "Подтвердить выбор и выйти (Enter)"
         fi
-    else
-        warn "Логи Nginx не найдены автоматически."
-        F2B_SELECTED_LOG=$(ask_non_empty "Введите полный путь к $log_type.log") || return 1
-    fi
+        printf_menu_option "b" "Назад"
+        echo ""
+        
+        local choice
+        choice=$(safe_read "Введите номер для переключения, v[номер] для просмотра или команду" "ok") || return 1
+
+        if [[ "$choice" == "b" || "$choice" == "B" ]]; then
+            return 1
+        elif [[ "$choice" == "m" || "$choice" == "M" ]]; then
+            local manual_path
+            manual_path=$(ask_non_empty "Введите полный путь к файлу лога") || continue
+            found_logs+=("$manual_path")
+            selected_flags+=("true")
+        elif [[ "$choice" == "ok" || "$choice" == "OK" || -z "$choice" ]]; then
+            local sel=""
+            for i in "${!found_logs[@]}"; do
+                if [[ "${selected_flags[$i]}" == "true" ]]; then
+                    sel="$sel ${found_logs[$i]}"
+                fi
+            done
+            sel=$(echo "$sel" | xargs)
+            if [[ -z "$sel" ]]; then
+                err "Не выбрано ни одного лога!"
+                wait_for_enter
+                continue
+            fi
+            F2B_SELECTED_LOG="$sel"
+            break
+        elif [[ "$choice" =~ ^[vV]([0-9]+)$ ]]; then
+            local idx="${BASH_REMATCH[1]}"
+            if [[ "$idx" -ge 1 && "$idx" -le ${#found_logs[@]} ]]; then
+                _f2b_live_view_log "${found_logs[$((idx-1))]}"
+            else
+                err "Неверный индекс лога."
+                wait_for_enter
+            fi
+        elif [[ "$choice" =~ ^[0-9]+$ ]]; then
+            local idx="$choice"
+            if [[ "$idx" -ge 1 && "$idx" -le ${#found_logs[@]} ]]; then
+                local current_flag="${selected_flags[$((idx-1))]}"
+                if [[ "$current_flag" == "true" ]]; then
+                    selected_flags[$((idx-1))]="false"
+                else
+                    selected_flags[$((idx-1))]="true"
+                fi
+            else
+                err "Неверный выбор."
+                wait_for_enter
+            fi
+        else
+            err "Неверная команда."
+            wait_for_enter
+        fi
+    done
+    return 0
 }
 
 _f2b_detect_syslog() {
     F2B_SELECTED_LOG=""
     local found_logs=()
+    local selected_flags=()
+
     if [[ -f "/var/log/syslog" ]]; then found_logs+=("/var/log/syslog"); fi
     if [[ -f "/var/log/messages" ]]; then found_logs+=("/var/log/messages"); fi
     if [[ -f "/var/log/auth.log" ]]; then found_logs+=("/var/log/auth.log"); fi
@@ -855,44 +944,118 @@ _f2b_detect_syslog() {
         found_logs+=("systemd")
     fi
 
-    if [[ ${#found_logs[@]} -gt 0 ]]; then
-        info "Подсказка по выбору системного лог-файла:"
-        printf_description " • В Ubuntu/Debian используется ${C_YELLOW}/var/log/syslog${C_RESET} или ${C_YELLOW}/var/log/auth.log${C_RESET}"
-        printf_description " • В CentOS/RHEL/Alma используется ${C_YELLOW}/var/log/messages${C_RESET} или ${C_YELLOW}/var/log/secure${C_RESET}"
-        printf_description " • На современных системах без rsyslog рекомендуется использовать ${C_YELLOW}systemd-journald${C_RESET}"
+    # Парсим текущие логи
+    if [[ -n "$current_log" && "$current_log" != "Не задан" ]]; then
+        for cl in $current_log; do
+            if [[ ! " ${found_logs[*]} " =~ " ${cl} " ]]; then
+                found_logs+=("$cl")
+            fi
+        done
+    fi
+
+    # Инициализация чекбоксов
+    for i in "${!found_logs[@]}"; do
+        local fpath="${found_logs[$i]}"
+        local is_sel="false"
+        if [[ -n "$current_log" && "$current_log" != "Не задан" ]]; then
+            if [[ " $current_log " == *" $fpath "* ]]; then
+                is_sel="true"
+            fi
+        else
+            if [[ $i -eq 0 ]]; then
+                is_sel="true"
+            fi
+        fi
+        selected_flags+=("$is_sel")
+    done
+
+    while true; do
+        clear
+        menu_header "📂 Выбор системных лог-файлов"
+        info "Подсказка по выбору системного лога:"
+        printf_description " • На современных системах рекомендуется использовать ${C_YELLOW}systemd${C_RESET}."
+        printf_description " • Вы можете выбрать ${C_GREEN}несколько${C_RESET} лог-файлов одновременно!"
+        printf_description " • Перед выбором вы можете просмотреть содержимое любого лога."
+        print_separator
         echo ""
 
-        ok "Найдены системные логи (${#found_logs[@]}):"
-        local i=1
-        for log_file in "${found_logs[@]}"; do
+        ok "Найденные системные логи (${#found_logs[@]}):"
+        for i in "${!found_logs[@]}"; do
+            local log_file="${found_logs[$i]}"
+            local chk="[ ]"
+            if [[ "${selected_flags[$i]}" == "true" ]]; then
+                chk="[${C_GREEN}✓${C_RESET}]"
+            else
+                chk="[ ]"
+            fi
+
             if [[ "$log_file" == "systemd" ]]; then
-                printf_description "  ${C_WHITE}${i})${C_RESET} systemd-journald ${C_GRAY}(Системный журнал Systemd)${C_RESET}"
+                printf_description "  $chk ${C_WHITE}$((i+1)))${C_RESET} systemd-journald ${C_GRAY}(Системный журнал Systemd)${C_RESET}"
             else
                 local size
                 size=$(du -h "$log_file" 2>/dev/null | awk '{print $1}')
-                printf_description "  ${C_WHITE}${i})${C_RESET} ${log_file} ${C_GRAY}(${size:-?})${C_RESET}"
+                printf_description "  $chk ${C_WHITE}$((i+1)))${C_RESET} ${log_file} ${C_GRAY}(${size:-?})${C_RESET}"
             fi
-            ((i++))
         done
+
         echo ""
         printf_menu_option "m" "Ввести путь вручную"
+        printf_menu_option "ok" "Подтвердить выбор и выйти (Enter)"
+        printf_menu_option "b" "Назад"
         echo ""
 
         local choice
-        choice=$(safe_read "Выберите файл лога" "1") || return 1
+        choice=$(safe_read "Введите номер для переключения, v[номер] для просмотра или команду" "ok") || return 1
 
-        if [[ "$choice" == "m" || "$choice" == "M" ]]; then
-            F2B_SELECTED_LOG=$(ask_non_empty "Введите полный путь к файлу системного лога") || return 1
-        elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#found_logs[@]} ]]; then
-            F2B_SELECTED_LOG="${found_logs[$((choice-1))]}"
-        else
-            err "Неверный выбор."
+        if [[ "$choice" == "b" || "$choice" == "B" ]]; then
             return 1
+        elif [[ "$choice" == "m" || "$choice" == "M" ]]; then
+            local manual_path
+            manual_path=$(ask_non_empty "Введите полный путь к файлу системного лога") || continue
+            found_logs+=("$manual_path")
+            selected_flags+=("true")
+        elif [[ "$choice" == "ok" || "$choice" == "OK" || -z "$choice" ]]; then
+            local sel=""
+            for i in "${!found_logs[@]}"; do
+                if [[ "${selected_flags[$i]}" == "true" ]]; then
+                    sel="$sel ${found_logs[$i]}"
+                fi
+            done
+            sel=$(echo "$sel" | xargs)
+            if [[ -z "$sel" ]]; then
+                err "Не выбрано ни одного лога!"
+                wait_for_enter
+                continue
+            fi
+            F2B_SELECTED_LOG="$sel"
+            break
+        elif [[ "$choice" =~ ^[vV]([0-9]+)$ ]]; then
+            local idx="${BASH_REMATCH[1]}"
+            if [[ "$idx" -ge 1 && "$idx" -le ${#found_logs[@]} ]]; then
+                _f2b_live_view_log "${found_logs[$((idx-1))]}"
+            else
+                err "Неверный индекс лога."
+                wait_for_enter
+            fi
+        elif [[ "$choice" =~ ^[0-9]+$ ]]; then
+            local idx="$choice"
+            if [[ "$idx" -ge 1 && "$idx" -le ${#found_logs[@]} ]]; then
+                local current_flag="${selected_flags[$((idx-1))]}"
+                if [[ "$current_flag" == "true" ]]; then
+                    selected_flags[$((idx-1))]="false"
+                else
+                    selected_flags[$((idx-1))]="true"
+                fi
+            else
+                err "Неверный выбор."
+                wait_for_enter
+            fi
+        else
+            err "Неверная команда."
+            wait_for_enter
         fi
-    else
-        warn "Системные логи не найдены."
-        F2B_SELECTED_LOG=$(ask_non_empty "Введите полный путь к системному логу") || return 1
-    fi
+    done
+    return 0
 }
 
 _f2b_reload_or_start() {
@@ -909,31 +1072,154 @@ _f2b_reload_or_start() {
     fi
 }
 
-_f2b_validate_log_path() {
-    local path="$1"
-    [[ "$path" == "systemd" ]] && return 0
-    [[ -z "$path" ]] && return 1
+_f2b_save_jail_option() {
+    local jail="$1"
+    local option="$2"
+    local value="$3"
+    
+    python3 - "$jail" "$option" "$value" <<'PYEOF'
+import sys
+import os
+import re
 
-    # Check for wildcards
-    if [[ "$path" == *"*"* ]]; then
-        local files
-        files=$(ls $path 2>/dev/null)
-        if [[ -z "$files" ]]; then
-            warn "Файлы по маске '$path' не найдены."
+fpath = "/etc/fail2ban/jail.local"
+jail = sys.argv[1]
+option = sys.argv[2]
+value = sys.argv[3]
+
+if not os.path.exists(fpath):
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
+    with open(fpath, "w", encoding="utf-8") as f:
+        f.write("# Fail2Ban local configuration\n")
+
+try:
+    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+except Exception as e:
+    sys.stderr.write(f"Error reading file: {e}\n")
+    sys.exit(1)
+
+section_pattern = re.compile(rf"^\[{re.escape(jail)}\]", re.IGNORECASE)
+next_section_pattern = re.compile(r"^\[[^\]]+\]")
+
+section_start = -1
+next_section_start = -1
+
+for idx, line in enumerate(lines):
+    if section_pattern.match(line.strip()):
+        section_start = idx
+        continue
+    if section_start != -1 and next_section_pattern.match(line.strip()):
+        next_section_start = idx
+        break
+
+if section_start == -1:
+    if lines and not lines[-1].endswith("\n"):
+        lines.append("\n")
+    lines.append(f"\n[{jail}]\n")
+    if value:
+        lines.append(f"{option} = {value}\n")
+else:
+    if next_section_start == -1:
+        next_section_start = len(lines)
+
+    option_pattern = re.compile(rf"^[ \t]*#?[ \t]*{re.escape(option)}[ \t]*=", re.IGNORECASE)
+    option_idx = -1
+    for idx in range(section_start + 1, next_section_start):
+        if option_pattern.match(lines[idx]):
+            option_idx = idx
+            break
+
+    if option_idx != -1:
+        if value:
+            lines[option_idx] = f"{option} = {value}\n"
+        else:
+            del lines[option_idx]
+    else:
+        if value:
+            lines.insert(section_start + 1, f"{option} = {value}\n")
+
+try:
+    with open(fpath, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+except Exception as e:
+    sys.stderr.write(f"Error writing file: {e}\n")
+    sys.exit(1)
+PYEOF
+}
+
+_f2b_live_view_log() {
+    local log_file="$1"
+    clear
+    menu_header "👁️ Просмотр лога в реальном времени"
+    printf_description "Файл: ${C_YELLOW}$log_file${C_RESET}"
+    printf_description "Нажмите ${C_GREEN}ENTER${C_RESET} или ${C_GREEN}Ctrl+C${C_RESET} для возврата в меню."
+    print_separator
+    echo ""
+
+    if [[ "$log_file" == "systemd" ]]; then
+        journalctl -n 50 -f &
+    else
+        if [[ ! -f "$log_file" ]]; then
+            err "Файл '$log_file' не существует или не является файлом."
+            wait_for_enter
+            return
+        fi
+        tail -n 50 -f "$log_file" &
+    fi
+    local tail_pid=$!
+
+    # Локальный trap для перехвата Ctrl+C во время просмотра логов
+    local old_trap
+    old_trap=$(trap -p SIGINT)
+    trap 'kill $tail_pid 2>/dev/null; wait $tail_pid 2>/dev/null; eval "$old_trap"; return' SIGINT
+
+    # Ожидание нажатия клавиши в неблокирующем цикле
+    while kill -0 "$tail_pid" 2>/dev/null; do
+        if read -t 0.5 -n 1 -r -s; then
+            break
+        fi
+    done
+
+    kill "$tail_pid" 2>/dev/null
+    wait "$tail_pid" 2>/dev/null
+    
+    eval "$old_trap"
+    
+    ok "Просмотр завершен."
+    sleep 0.5
+}
+
+_f2b_validate_log_path() {
+    local full_path="$1"
+    [[ -z "$full_path" ]] && return 1
+    [[ "$full_path" == "systemd" ]] && return 0
+
+    # Проверяем каждый путь из разделенных пробелом
+    for path in $full_path; do
+        [[ "$path" == "systemd" ]] && continue
+        
+        # Проверка масок / wildcards
+        if [[ "$path" == *"*"* ]]; then
+            local files
+            files=$(ls $path 2>/dev/null)
+            if [[ -z "$files" ]]; then
+                warn "Файлы по маске '$path' не найдены."
+                if ! ask_yes_no "Использовать этот путь все равно?"; then
+                    return 1
+                fi
+            fi
+            continue
+        fi
+
+        # Проверка обычного файла
+        if [[ ! -f "$path" ]]; then
+            warn "Файл лога '$path' не найден на сервере."
             if ! ask_yes_no "Использовать этот путь все равно?"; then
                 return 1
             fi
         fi
-        return 0
-    fi
-
-    # Check normal file
-    if [[ ! -f "$path" ]]; then
-        warn "Файл лога '$path' не найден на сервере."
-        if ! ask_yes_no "Использовать этот путь все равно?"; then
-            return 1
-        fi
-    fi
+    done
     return 0
 }
 
@@ -960,7 +1246,6 @@ _f2b_jail_submenu() {
 
         local filter_file="/etc/fail2ban/filter.d/${jail_name}.conf"
 
-        # Сбрасываем is_enabled перед перепроверкой
         is_enabled="false"
 
         if grep -q "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null; then
@@ -1000,7 +1285,6 @@ _f2b_jail_submenu() {
                     act_port=$(echo "$current_a" | grep -o "port=[^,]*" | cut -d= -f2 | tr -d ']"')
                 fi
                 
-                # Если порт в действии пустой или ссылается на макрос, используем текущий порт джейла
                 if [[ -z "$act_port" || "$act_port" == "%(port)s" ]]; then
                     act_port="$current_p"
                 fi
@@ -1050,7 +1334,7 @@ _f2b_jail_submenu() {
         case "$choice" in
             1)
                 if [[ "$is_enabled" == "true" ]]; then
-                    run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s/enabled\s*=\s*true/enabled = false/" /etc/fail2ban/jail.local
+                    _f2b_save_jail_option "$jail_name" "enabled" "false"
                     ok "Защита '$jail_name' выключена."
                     _f2b_reload_or_start
                 else
@@ -1063,38 +1347,23 @@ _f2b_jail_submenu() {
                         info "Создаю стандартный файл фильтра..."
                         echo -e "$default_filter" | run_cmd tee "$filter_file" > /dev/null
                     fi
-                    if ! grep -q "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null; then
-                        info "Добавляю секцию в jail.local..."
-                        if [[ "$current_log" == "systemd" ]]; then
-                            cat <<JAIL | run_cmd tee -a /etc/fail2ban/jail.local > /dev/null
-
-[$jail_name]
-enabled = true
-port = $current_p
-filter = $jail_name
-backend = systemd
-maxretry = $current_maxretry
-findtime = 600
-bantime = 86400
-action = $current_a
-JAIL
-                        else
-                            cat <<JAIL | run_cmd tee -a /etc/fail2ban/jail.local > /dev/null
-
-[$jail_name]
-enabled = true
-port = $current_p
-filter = $jail_name
-logpath = $current_log
-maxretry = $current_maxretry
-findtime = 600
-bantime = 86400
-action = $current_a
-JAIL
-                        fi
+                    
+                    info "Сохраняю конфигурацию защиты в jail.local..."
+                    _f2b_save_jail_option "$jail_name" "enabled" "true"
+                    _f2b_save_jail_option "$jail_name" "port" "$current_p"
+                    _f2b_save_jail_option "$jail_name" "filter" "$jail_name"
+                    if [[ "$current_log" == "systemd" ]]; then
+                        _f2b_save_jail_option "$jail_name" "backend" "systemd"
+                        _f2b_save_jail_option "$jail_name" "logpath" ""
                     else
-                        run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s/enabled\s*=\s*false/enabled = true/" /etc/fail2ban/jail.local
+                        _f2b_save_jail_option "$jail_name" "backend" ""
+                        _f2b_save_jail_option "$jail_name" "logpath" "$current_log"
                     fi
+                    _f2b_save_jail_option "$jail_name" "maxretry" "$current_maxretry"
+                    _f2b_save_jail_option "$jail_name" "findtime" "600"
+                    _f2b_save_jail_option "$jail_name" "bantime" "86400"
+                    _f2b_save_jail_option "$jail_name" "action" "$current_a"
+                    
                     ok "Защита '$jail_name' включена."
                     _f2b_reload_or_start
                 fi
@@ -1105,15 +1374,12 @@ JAIL
                 new_maxretry=$(safe_read "Введите новое количество попыток (текущее: $current_maxretry)" "$current_maxretry") || continue
                 if [[ "$new_maxretry" =~ ^[0-9]+$ ]]; then
                     if grep -q "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null; then
-                        if grep -A 10 "^\s*\[$jail_name\]" /etc/fail2ban/jail.local | grep -q "^\s*maxretry\s*="; then
-                            run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s/^\s*maxretry\s*=.*/maxretry = $new_maxretry/" /etc/fail2ban/jail.local
-                        else
-                            run_cmd sed -i "/^\[$jail_name\]/a maxretry = $new_maxretry" /etc/fail2ban/jail.local
-                        fi
+                        _f2b_save_jail_option "$jail_name" "maxretry" "$new_maxretry"
                         ok "maxretry обновлен до $new_maxretry"
                         [[ "$is_enabled" == "true" ]] && _f2b_reload_or_start
                     else
-                        warn "Сначала включите защиту, чтобы конфигурация была создана."
+                        current_maxretry="$new_maxretry"
+                        ok "Количество попыток выбрано: $new_maxretry. Включите защиту для применения."
                     fi
                 else
                     err "Должно быть числом."
@@ -1131,7 +1397,6 @@ JAIL
                     F2B_SELECTED_LOG=$(ask_non_empty "Введите путь к логу") || continue
                 fi
                 
-                # Проверяем существование файла лога с выдачей предупреждения
                 if ! _f2b_validate_log_path "$F2B_SELECTED_LOG"; then
                     wait_for_enter
                     continue
@@ -1140,27 +1405,15 @@ JAIL
                 if [[ -n "$F2B_SELECTED_LOG" ]]; then
                     if grep -q "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null; then
                         if [[ "$F2B_SELECTED_LOG" == "systemd" ]]; then
-                            # Удаляем logpath из секции джейла, если он был
-                            run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ {/^\s*logpath\s*=/d}" /etc/fail2ban/jail.local
-                            if grep -A 10 "^\s*\[$jail_name\]" /etc/fail2ban/jail.local | grep -q "^\s*backend\s*="; then
-                                run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s|^\s*backend\s*=.*|backend = systemd|" /etc/fail2ban/jail.local
-                            else
-                                run_cmd sed -i "/^\[$jail_name\]/a backend = systemd" /etc/fail2ban/jail.local
-                            fi
+                            _f2b_save_jail_option "$jail_name" "logpath" ""
+                            _f2b_save_jail_option "$jail_name" "backend" "systemd"
                         else
-                            # Удаляем backend = systemd, если он был
-                            run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ {/^\s*backend\s*=\s*systemd/d}" /etc/fail2ban/jail.local
-                            # Добавляем или обновляем logpath
-                            if grep -A 10 "^\s*\[$jail_name\]" /etc/fail2ban/jail.local | grep -q "^\s*logpath\s*="; then
-                                run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s|^\s*logpath\s*=.*|logpath = ${F2B_SELECTED_LOG}|" /etc/fail2ban/jail.local
-                            else
-                                run_cmd sed -i "/^\[$jail_name\]/a logpath = ${F2B_SELECTED_LOG}" /etc/fail2ban/jail.local
-                            fi
+                            _f2b_save_jail_option "$jail_name" "backend" ""
+                            _f2b_save_jail_option "$jail_name" "logpath" "$F2B_SELECTED_LOG"
                         fi
                         ok "Лог обновлен."
                         [[ "$is_enabled" == "true" ]] && _f2b_reload_or_start
                     else
-                        # Сохраняем во временную переменную до включения джейла
                         current_log="$F2B_SELECTED_LOG"
                         ok "Лог выбран. Включите защиту для применения."
                     fi
@@ -1198,13 +1451,12 @@ JAIL
                 new_a_val="ufw[name=${jail_name//-/_}, port=${new_p_val}, protocol=tcp]"
                 
                 if grep -q "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null; then
-                    run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s|^\s*port\s*=.*|port = ${new_p_val}|" /etc/fail2ban/jail.local
-                    run_cmd sed -i "/^\[$jail_name\]/,/^\s*\[/ s|^\s*action\s*=.*|action = ${new_a_val}|" /etc/fail2ban/jail.local
+                    _f2b_save_jail_option "$jail_name" "port" "${new_p_val}"
+                    _f2b_save_jail_option "$jail_name" "action" "${new_a_val}"
                     ok "Метод блокировки обновлен в конфигурации."
                     [[ "$is_enabled" == "true" ]] && _f2b_reload_or_start
                 fi
                 
-                # Обновляем локальные переменные для корректного отображения и будущего включения
                 current_p="$new_p_val"
                 current_a="$new_a_val"
                 

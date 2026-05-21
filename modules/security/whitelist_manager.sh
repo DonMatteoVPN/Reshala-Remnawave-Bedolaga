@@ -397,7 +397,7 @@ _gwl_sync_geoblock() {
         local set_name="reshala_geo_whitelist"
         [[ "$family" == "inet6" ]] && set_name="reshala_geo_whitelist6"
 
-        if ! ipset list "$set_name" &>/dev/null; then
+        if ! ipset list "$set_name" -terse &>/dev/null; then
             run_cmd ipset create "$set_name" hash:net family "$family" hashsize 256 maxelem 1024 2>/dev/null || true
         fi
         run_cmd ipset flush "$set_name" 2>/dev/null || true
@@ -542,7 +542,7 @@ show_global_whitelist_menu() {
             printf_description "  ${C_GRAY}○${C_RESET} eBPF Шейпер (движок не запущен)"
         fi
         # Geo-block
-        if command -v ipset &>/dev/null && ipset list reshala_geo_whitelist &>/dev/null; then
+        if command -v ipset &>/dev/null && ipset list reshala_geo_whitelist -terse &>/dev/null; then
             printf_description "  ${C_GREEN}✓${C_RESET} Geo-Block (ipset)"
         else
             printf_description "  ${C_GRAY}○${C_RESET} Geo-Block (не активен)"
