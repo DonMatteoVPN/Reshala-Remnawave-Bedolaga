@@ -474,22 +474,22 @@ find_log_file() {
     local log_name="$1" # "ufw", "auth", "kernel"
     case "$log_name" in
         ufw)
-            if [[ -f "/var/log/ufw.log" ]]; then echo "/var/log/ufw.log"
-            elif [[ -f "/var/log/kern.log" ]]; then echo "/var/log/kern.log"
-            elif [[ -f "/var/log/syslog" ]]; then echo "/var/log/syslog"
-            else journalctl -t ufw | tail -n 100 > /tmp/reshala_ufw.log; echo "/tmp/reshala_ufw.log"
+            if run_cmd test -f "/var/log/ufw.log" 2>/dev/null; then echo "/var/log/ufw.log"
+            elif run_cmd test -f "/var/log/kern.log" 2>/dev/null; then echo "/var/log/kern.log"
+            elif run_cmd test -f "/var/log/syslog" 2>/dev/null; then echo "/var/log/syslog"
+            else run_cmd journalctl -t ufw | tail -n 100 > /tmp/reshala_ufw.log; echo "/tmp/reshala_ufw.log"
             fi
             ;;
         auth)
-            if [[ -f "/var/log/auth.log" ]]; then echo "/var/log/auth.log"
-            elif [[ -f "/var/log/secure" ]]; then echo "/var/log/secure"
-            else journalctl -t sshd | tail -n 100 > /tmp/reshala_auth.log; echo "/tmp/reshala_auth.log"
+            if run_cmd test -f "/var/log/auth.log" 2>/dev/null; then echo "/var/log/auth.log"
+            elif run_cmd test -f "/var/log/secure" 2>/dev/null; then echo "/var/log/secure"
+            else run_cmd journalctl -t sshd | tail -n 100 > /tmp/reshala_auth.log; echo "/tmp/reshala_auth.log"
             fi
             ;;
         kernel)
-            if [[ -f "/var/log/kern.log" ]]; then echo "/var/log/kern.log"
-            elif [[ -f "/var/log/syslog" ]]; then echo "/var/log/syslog"
-            else dmesg | tail -n 100 > /tmp/reshala_kern.log; echo "/tmp/reshala_kern.log"
+            if run_cmd test -f "/var/log/kern.log" 2>/dev/null; then echo "/var/log/kern.log"
+            elif run_cmd test -f "/var/log/syslog" 2>/dev/null; then echo "/var/log/syslog"
+            else run_cmd dmesg | tail -n 100 > /tmp/reshala_kern.log; echo "/tmp/reshala_kern.log"
             fi
             ;;
     esac

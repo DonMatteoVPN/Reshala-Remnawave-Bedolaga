@@ -99,11 +99,11 @@ show_geoblock_menu() {
 
 _geo_get_ipset_count() {
     local set_name="$1"
-    if ! ipset list "$set_name" -terse &>/dev/null; then
+    if ! run_cmd ipset list "$set_name" -terse &>/dev/null; then
         echo "0"
         return
     fi
-    ipset list "$set_name" -terse 2>/dev/null | grep -Fi "Number of entries:" | awk '{print $4}' || echo "0"
+    run_cmd ipset list "$set_name" -terse 2>/dev/null | grep -Fi "Number of entries:" | awk '{print $4}' || echo "0"
 }
 
 _geo_print_card_row() {
@@ -216,7 +216,7 @@ _geo_show_status() {
     local countries_count=0
     local names_str=""
     
-    if ipset list "$GEO_IPSET_NAME" -terse &>/dev/null 2>&1; then
+    if run_cmd ipset list "$GEO_IPSET_NAME" -terse &>/dev/null 2>&1; then
         active=1
         ip_count=$(_geo_get_ipset_count "$GEO_IPSET_NAME")
         
@@ -258,7 +258,7 @@ _geo_show_status() {
     fi
 
     local autostart="${C_GRAY}Выключена${C_RESET}"
-    if systemctl is-enabled reshala-geoblock &>/dev/null 2>&1; then
+    if run_cmd systemctl is-enabled reshala-geoblock &>/dev/null 2>&1; then
         autostart="${C_GREEN}Включена${C_RESET}"
     fi
 
@@ -911,7 +911,7 @@ _geo_activate() {
 
         if run_cmd ipset restore < "$temp_dir/restore.txt"; then
             # Производим бесшовную замену (swap) основного ipset
-            if ! ipset list "$GEO_IPSET_NAME" &>/dev/null; then
+            if ! run_cmd ipset list "$GEO_IPSET_NAME" &>/dev/null; then
                 run_cmd ipset create "$GEO_IPSET_NAME" hash:net hashsize 65536 maxelem 500000
             fi
             run_cmd ipset swap "$GEO_IPSET_NAME" "$temp_ipset"
@@ -1057,7 +1057,7 @@ _geo_activate() {
     fi
 
     # Swap whitelist
-    if ! ipset list reshala_geo_whitelist &>/dev/null; then
+    if ! run_cmd ipset list reshala_geo_whitelist &>/dev/null; then
         run_cmd ipset create reshala_geo_whitelist hash:net hashsize 256 maxelem 1024 2>/dev/null || true
     fi
     run_cmd ipset swap reshala_geo_whitelist "$temp_wl_ipset"
@@ -1075,8 +1075,8 @@ _geo_activate() {
     # Создаем кэш на диске
     info "Сохраняю правила в локальный кэш..."
     run_cmd mkdir -p "$GEO_CONFIG_DIR"
-    run_cmd ipset save "$GEO_IPSET_NAME" > "$GEO_CONFIG_DIR/${GEO_IPSET_NAME}.ipset"
-    run_cmd ipset save reshala_geo_whitelist > "$GEO_CONFIG_DIR/reshala_geo_whitelist.ipset"
+    run_cmd ipset save "$GEO_IPSET_NAME" | run_cmd tee "$GEO_CONFIG_DIR/${GEO_IPSET_NAME}.ipset" > /dev/null
+    run_cmd ipset save reshala_geo_whitelist | run_cmd tee "$GEO_CONFIG_DIR/reshala_geo_whitelist.ipset" > /dev/null
     ok "Локальный кэш успешно обновлен."
 
     _check_ctrlc || return 130
@@ -1088,7 +1088,11 @@ _geo_activate() {
 
     # Перезагружаем UFW
     if command -v ufw &>/dev/null; then
-        run_cmd ufw reload 2>/dev/null || true
+        if run_cmd ufw status 2>/dev/null | grep -qi "active"; then
+            run_cmd ufw reload &>/dev/null || true
+        else
+            warn "ВНИМАНИЕ: UFW выключен! Geo-Block не будет работать до включения брандмауэра."
+        fi
     fi
 
     disable_graceful_ctrlc
@@ -1117,7 +1121,9 @@ _geo_deactivate() {
     run_cmd systemctl daemon-reload 2>/dev/null || true
 
     if command -v ufw &>/dev/null; then
-        run_cmd ufw reload 2>/dev/null || true
+        if run_cmd ufw status 2>/dev/null | grep -qi "active"; then
+            run_cmd ufw reload &>/dev/null || true
+        fi
     fi
 
     ok "Geo-Block деактивирован."
@@ -1131,7 +1137,7 @@ _geo_insert_ufw_rule() {
     _geo_remove_ufw_rule
 
     # Вставляем новый блок после :ufw-before-input
-    python3 - <<PYEOF
+    run_cmd python3 - <<PYEOF
 import re
 
 with open('$before_rules', 'r') as f:
@@ -1157,7 +1163,7 @@ _geo_remove_ufw_rule() {
     local before_rules="/etc/ufw/before.rules"
     [[ ! -f "$before_rules" ]] && return
 
-    python3 - <<'PYEOF'
+    run_cmd python3 - <<'PYEOF'
 import re
 with open('/etc/ufw/before.rules', 'r') as f:
     content = f.read()
@@ -1259,7 +1265,7 @@ _geo_show_stats() {
     info "Статистика Geo-Block"
     print_separator
 
-    if ! ipset list "$GEO_IPSET_NAME" -terse &>/dev/null 2>&1; then
+    if ! run_cmd ipset list "$GEO_IPSET_NAME" -terse &>/dev/null 2>&1; then
         warn "Geo-Block не активен."
         return
     fi
@@ -1341,14 +1347,14 @@ _geo_test_ip() {
     local in_geoblock="⚪ Нет"
     local status="${C_GREEN}🟢 РАЗРЕШЕН (Geo-Block не активен)${C_RESET}"
 
-    if ipset list reshala_geo_whitelist &>/dev/null; then
+    if run_cmd ipset list reshala_geo_whitelist &>/dev/null; then
         is_active=1
         if ipset test reshala_geo_whitelist "$ip" &>/dev/null; then
             in_whitelist="${C_GREEN}🟢 Да (В белом списке)${C_RESET}"
         fi
     fi
 
-    if ipset list "$GEO_IPSET_NAME" &>/dev/null; then
+    if run_cmd ipset list "$GEO_IPSET_NAME" &>/dev/null; then
         is_active=1
         if ipset test "$GEO_IPSET_NAME" "$ip" &>/dev/null; then
             in_geoblock="${C_RED}🔴 Да (В черном списке)${C_RESET}"
@@ -1429,7 +1435,7 @@ done
 if [[ "$subnets_total" -gt 0 && -f "$temp_dir/restore.txt" ]]; then
     if ipset restore < "$temp_dir/restore.txt"; then
         # Swap
-        if ! ipset list reshala_geoblock &>/dev/null; then
+        if ! run_cmd ipset list reshala_geoblock &>/dev/null; then
             ipset create reshala_geoblock hash:net hashsize 65536 maxelem 500000
         fi
         ipset swap reshala_geoblock "$temp_ipset"

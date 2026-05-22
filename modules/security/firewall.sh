@@ -558,7 +558,7 @@ _antiddos_setup_limits() {
     fi
 
     # Вставляем через Python (безопасная точечная вставка)
-    python3 - "$before_rules" "$conn_limit" "$rate_limit" "$wl_rules" <<'PYEOF'
+    run_cmd python3 - "$before_rules" "$conn_limit" "$rate_limit" "$wl_rules" <<'PYEOF'
 import sys, re
 rules_file = sys.argv[1]
 conn = sys.argv[2]
@@ -603,7 +603,7 @@ _antiddos_remove_block() {
     local before_rules="/etc/ufw/before.rules"
     [[ ! -f "$before_rules" ]] && return
 
-    python3 - <<'PYEOF'
+    run_cmd python3 - <<'PYEOF'
 import re
 with open('/etc/ufw/before.rules', 'r') as f:
     content = f.read()
@@ -646,7 +646,7 @@ _firewall_fix_docker_ufw() {
 
     if [[ -f "$after_rules" ]] && grep -q "$marker_start" "$after_rules"; then
         info "Блок Docker UFW Fix уже существует в after.rules. Обновляю..."
-        python3 - <<PYEOF
+        run_cmd python3 - <<PYEOF
 import re
 with open('${after_rules}', 'r') as f:
     content = f.read()
@@ -657,7 +657,7 @@ PYEOF
     fi
 
     # Вставляем блок перед последним COMMIT в after.rules
-    python3 - "$after_rules" "$marker_start" "$marker_end" "$iface" <<'PYEOF'
+    run_cmd python3 - "$after_rules" "$marker_start" "$marker_end" "$iface" <<'PYEOF'
 import sys
 rules_file, marker_s, marker_e, iface = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(rules_file, 'r') as f:
@@ -742,7 +742,7 @@ _firewall_logs_analytics() {
     # ТОП-10 атакующих IP
     info "ТОП-10 IP, заблокированных UFW:"
     print_separator "-" 50
-    grep "\[UFW BLOCK\]" "$log_file" 2>/dev/null | \
+    run_cmd grep "\[UFW BLOCK\]" "$log_file" 2>/dev/null | \
         grep -oP 'SRC=\K[0-9.]+' | \
         sort | uniq -c | sort -rn | head -10 | \
         while read count ip; do
@@ -754,7 +754,7 @@ _firewall_logs_analytics() {
     # ТОП-10 портов
     info "ТОП-10 атакуемых портов:"
     print_separator "-" 50
-    grep "\[UFW BLOCK\]" "$log_file" 2>/dev/null | \
+    run_cmd grep "\[UFW BLOCK\]" "$log_file" 2>/dev/null | \
         grep -oP 'DPT=\K[0-9]+' | \
         sort | uniq -c | sort -rn | head -10 | \
         while read count port; do
@@ -765,13 +765,13 @@ _firewall_logs_analytics() {
 
     # Общая статистика
     local total_blocks
-    total_blocks=$(grep -c "\[UFW BLOCK\]" "$log_file" 2>/dev/null || echo "0")
+    total_blocks=$(run_cmd grep -c "\[UFW BLOCK\]" "$log_file" 2>/dev/null || echo "0")
     ok "Всего блокировок в логе: ${C_RED}${total_blocks}${C_RESET}"
 
     echo ""
     if ask_yes_no "Показать живой мониторинг блокировок? (Ctrl+C для выхода)" "n"; then
         enable_graceful_ctrlc
-        tail -f "$log_file" | grep --line-buffered "\[UFW BLOCK\]"
+        run_cmd tail -f "$log_file" | grep --line-buffered "\[UFW BLOCK\]"
         disable_graceful_ctrlc
     fi
 }

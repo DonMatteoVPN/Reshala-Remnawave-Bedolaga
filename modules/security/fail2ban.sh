@@ -24,6 +24,53 @@ _f2b_is_service_active() {
     return 1
 }
 
+_f2b_ensure_jail_logs_exist() {
+    if [[ ! -f "/etc/fail2ban/jail.local" ]]; then
+        return 0
+    fi
+    info "Проверка и создание недостающих лог-файлов для активных Jail..."
+    run_cmd python3 - <<'PYEOF'
+import configparser
+import os
+import re
+import sys
+
+fpath = "/etc/fail2ban/jail.local"
+if not os.path.exists(fpath):
+    sys.exit(0)
+
+try:
+    config = configparser.ConfigParser(interpolation=None, strict=False)
+    config.read(fpath, encoding="utf-8")
+except Exception as e:
+    sys.stderr.write(f"Ошибка чтения jail.local: {e}\n")
+    sys.exit(0)
+
+for section in config.sections():
+    try:
+        if config.has_option(section, 'enabled') and config.get(section, 'enabled').lower() == 'true':
+            if config.has_option(section, 'logpath'):
+                logpath_val = config.get(section, 'logpath')
+                if logpath_val:
+                    paths = re.split(r'\s+', logpath_val.strip())
+                    for path in paths:
+                        if not path or '*' in path or '?' in path or path == 'systemd':
+                            continue
+                        if path.startswith('/'):
+                            dir_path = os.path.dirname(path)
+                            if not os.path.exists(dir_path):
+                                os.makedirs(dir_path, exist_ok=True)
+                                os.chmod(dir_path, 0o755)
+                            if not os.path.exists(path):
+                                with open(path, 'a'):
+                                    pass
+                                os.chmod(path, 0o666)
+                                sys.stdout.write(f"Создан лог-заглушка: {path}\n")
+    except Exception as e:
+        sys.stderr.write(f"Ошибка обработки секции [{section}]: {e}\n")
+PYEOF
+}
+
 _f2b_get_jail_var() {
     local jail="$1"
     local var="$2"
@@ -146,6 +193,7 @@ show_fail2ban_menu() {
                 if ! command -v fail2ban-client &> /dev/null; then
                     warn "Fail2Ban не установлен."
                 else
+                    _f2b_ensure_jail_logs_exist
                     info "Перезапускаю Fail2Ban..."
                     run_cmd systemctl restart fail2ban
                     ok "Сервис перезапущен."
@@ -331,6 +379,7 @@ _f2b_bantime_menu() {
     if [[ -f "/etc/fail2ban/jail.local" ]]; then
         info "Обновляю bantime в /etc/fail2ban/jail.local..."
         run_cmd sed -i "s/^bantime = .*/bantime = $new_bantime/" /etc/fail2ban/jail.local
+        _f2b_ensure_jail_logs_exist
         info "Перезапускаю Fail2Ban для применения изменений..."
         run_cmd systemctl restart fail2ban
         ok "Время бана обновлено."
@@ -353,7 +402,7 @@ _f2b_update_ignoreip() {
     info "Обновляю ignoreip в /etc/fail2ban/jail.local..."
     
     # Сверхнадежное обновление ignoreip с помощью Python
-    python3 - "$whitelist_ips" <<'PYEOF'
+    run_cmd python3 - "$whitelist_ips" <<'PYEOF'
 import sys
 import re
 
@@ -652,6 +701,7 @@ EOF
                     if ask_yes_no "Удалить $jail_to_rm (фильтр и конфиг)?"; then
                         run_cmd sed -i "/^\[$jail_to_rm\]/,/^\s*\[/d" /etc/fail2ban/jail.local 2>/dev/null
                         run_cmd rm -f "/etc/fail2ban/filter.d/${jail_to_rm}.conf"
+                        _f2b_ensure_jail_logs_exist
                         run_cmd systemctl reload fail2ban 2>/dev/null
                         ok "Удалено."
                     fi
@@ -669,6 +719,7 @@ EOF
                 run_cmd sed -i "/^\[nginx-auth-reshala\]/,/^\s*\[/ s/enabled\s*=\s*true/enabled = false/" /etc/fail2ban/jail.local 2>/dev/null
                 run_cmd sed -i "/^\[nginx-bots-reshala\]/,/^\s*\[/ s/enabled\s*=\s*true/enabled = false/" /etc/fail2ban/jail.local 2>/dev/null
                 run_cmd sed -i "/^\[nginx-scanners-reshala\]/,/^\s*\[/ s/enabled\s*=\s*true/enabled = false/" /etc/fail2ban/jail.local 2>/dev/null
+                _f2b_ensure_jail_logs_exist
                 run_cmd systemctl reload fail2ban 2>/dev/null
                 ;;
             b|B) break ;;
@@ -811,6 +862,7 @@ JAIL
 
     info "Включаю и перезапускаю сервис Fail2Ban..."
     run_cmd systemctl enable fail2ban
+    _f2b_ensure_jail_logs_exist
     run_cmd systemctl restart fail2ban
     
     if _f2b_is_service_active; then
@@ -1123,6 +1175,7 @@ _f2b_detect_syslog() {
 }
 
 _f2b_reload_or_start() {
+    _f2b_ensure_jail_logs_exist
     if _f2b_is_service_active; then
         info "Перезагружаю конфигурацию Fail2Ban..."
         run_cmd systemctl reload fail2ban 2>/dev/null || run_cmd systemctl restart fail2ban
@@ -1141,7 +1194,7 @@ _f2b_save_jail_option() {
     local option="$2"
     local value="$3"
     
-    python3 - "$jail" "$option" "$value" <<'PYEOF'
+    run_cmd python3 - "$jail" "$option" "$value" <<'PYEOF'
 import sys
 import os
 import re

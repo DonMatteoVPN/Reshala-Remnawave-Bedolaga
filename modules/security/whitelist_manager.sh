@@ -177,7 +177,7 @@ global_whitelist_prepend_system_ips() {
 
     if [[ "$added_any" -gt 0 ]]; then
         # Вставляем новый блок ПОСЛЕ шапки (первые строки с #)
-        python3 - "$GLOBAL_WHITELIST_FILE" "$new_block" <<'PYEOF'
+        run_cmd python3 - "$GLOBAL_WHITELIST_FILE" "$new_block" <<'PYEOF'
 import sys
 fpath = sys.argv[1]
 new_block = sys.argv[2]
@@ -203,7 +203,7 @@ PYEOF
     fi
 
     # Очистка возможных дублей шапки (авто-фикс для существующих файлов)
-    python3 - "$GLOBAL_WHITELIST_FILE" <<'PYEOF'
+    run_cmd python3 - "$GLOBAL_WHITELIST_FILE" <<'PYEOF'
 import sys
 fpath = sys.argv[1]
 with open(fpath, 'r') as f:
@@ -316,7 +316,7 @@ _gwl_sync_fail2ban() {
     done
 
     # Сверхнадежное обновление ignoreip с помощью Python
-    python3 - "$ignoreip" <<'PYEOF'
+    run_cmd python3 - "$ignoreip" <<'PYEOF'
 import sys
 import re
 
@@ -433,7 +433,7 @@ _gwl_sync_ufw() {
     fi
 
     # Удаляем старые whitelist-записи
-    python3 - <<'PYEOF'
+    run_cmd python3 - <<'PYEOF'
 import re
 with open('/etc/ufw/before.rules', 'r') as f:
     content = f.read()
@@ -449,7 +449,7 @@ PYEOF
     done
 
     if [[ -n "$wl_lines" ]]; then
-        python3 - "$wl_lines" <<'PYEOF'
+        run_cmd python3 - "$wl_lines" <<'PYEOF'
 import sys
 wl = sys.argv[1]
 with open('/etc/ufw/before.rules', 'r') as f:
