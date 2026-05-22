@@ -1147,7 +1147,18 @@ _vgw_check_our_certs_exist() {
         else
             warn "  ⚠️  openssl не установлен на хосте! Не удалось создать временный сертификат."
         fi
+    else
+        # Если файлы уже существуют, гарантируем правильные права доступа
+        chmod 755 "${certs_dir}" 2>/dev/null || true
+        chmod 644 "${cert_file}" "${key_file}" 2>/dev/null || true
     fi
+
+    # Гарантируем, что все родительские директории на хосте доступны для поиска (+x) другим пользователям (в т.ч. докер-пользователю)
+    local p="${certs_dir}"
+    while [[ "$p" != "/" && -n "$p" ]]; do
+        chmod o+x "$p" 2>/dev/null || true
+        p=$(dirname "$p")
+    done
 
     if [[ ! -f "$cert_file" ]]; then
         warn "  ⚠️  Сертификат для '${domain}' НЕ НАЙДЕН в ${certs_dir}/"
@@ -1511,6 +1522,11 @@ _vgw_nginx_inject_auto() {
         docker:conf.d:*)
             local conf_host="${cpath}/80-bedolaga.conf"
 
+            # ── Шаг 0.5: Убеждаемся, что сертификаты УЖЕ лежат на хосте ДО перезапуска контейнера ──
+            if [[ "$VOLUME_NEEDED" == "1" && "$CERT" == "/etc/nginx/certs/"* ]]; then
+                _vgw_check_our_certs_exist "$domain"
+            fi
+
             # ── Шаг 1: Убеждаемся что volumes смонтированы ──────
             if [[ "$VOLUME_NEEDED" == "1" ]]; then
                 info "Проверяю/добавляю volume сертификатов в docker-compose.yml..."
@@ -1519,6 +1535,32 @@ _vgw_nginx_inject_auto() {
                     # Используем временный snakeoil чтобы хоть что-то работало
                     CERT="/etc/ssl/certs/ssl-cert-snakeoil.pem"
                     KEY="/etc/ssl/private/ssl-cert-snakeoil.key"
+                fi
+            fi
+
+            # ── Шаг 1.5: Проверяем доступность сертификатов внутри контейнера ──
+            if [[ "$VOLUME_NEEDED" == "1" && "$CERT" == "/etc/nginx/certs/"* ]]; then
+                # Гарантируем права и наличие сертификатов перед проверкой
+                _vgw_check_our_certs_exist "$domain"
+                if ! docker exec "$cname" sh -c "[ -f '$CERT' ] && [ -r '$CERT' ] && [ -f '$KEY' ] && [ -r '$KEY' ]" 2>/dev/null; then
+                    warn "  ⚠️  Файлы сертификатов $CERT или $KEY недоступны или некорректны (каталог вместо файла) внутри контейнера $cname!"
+                    warn "  Пытаюсь принудительно исправить права доступа на хосте..."
+                    local certs_dir; certs_dir="$(_vgw_certs_dir)"
+                    chmod 755 "$certs_dir" 2>/dev/null || true
+                    chmod 644 "${certs_dir}/fullchain.pem" "${certs_dir}/privkey.pem" 2>/dev/null || true
+                    
+                    # Также пробуем сделать родительские папки на хосте доступными
+                    local p="$certs_dir"
+                    while [[ "$p" != "/" && -n "$p" ]]; do
+                        chmod o+x "$p" 2>/dev/null || true
+                        p=$(dirname "$p")
+                    done
+                    
+                    if ! docker exec "$cname" sh -c "[ -f '$CERT' ] && [ -r '$CERT' ] && [ -f '$KEY' ] && [ -r '$KEY' ]" 2>/dev/null; then
+                        printf_error "Критическая ошибка: Сертификаты недоступны или не являются файлами внутри контейнера $cname!"
+                        warn "Пути на хосте: $(_vgw_certs_dir)"
+                        return 1
+                    fi
                 fi
             fi
 
@@ -1568,10 +1610,39 @@ _vgw_nginx_inject_auto() {
 
         docker:nginx:*)
             # Прочий docker nginx: инжект через docker cp
+            # ── Шаг 0.5: Убеждаемся, что сертификаты УЖЕ лежат на хосте ДО перезапуска контейнера ──
+            if [[ "$VOLUME_NEEDED" == "1" && "$CERT" == "/etc/nginx/certs/"* ]]; then
+                _vgw_check_our_certs_exist "$domain"
+            fi
+
             # ── Шаг 1: Проверяем/добавляем volumes ──────────────
             if [[ "$VOLUME_NEEDED" == "1" ]]; then
                 info "Проверяю/добавляю volume сертификатов в docker-compose.yml..."
                 _vgw_ensure_container_volumes "$cname" "$VOLUME_HOST" "$VOLUME_CONT" || true
+            fi
+
+            # ── Шаг 1.5: Проверяем доступность сертификатов внутри контейнера ──
+            if [[ "$VOLUME_NEEDED" == "1" && "$CERT" == "/etc/nginx/certs/"* ]]; then
+                _vgw_check_our_certs_exist "$domain"
+                if ! docker exec "$cname" sh -c "[ -f '$CERT' ] && [ -r '$CERT' ] && [ -f '$KEY' ] && [ -r '$KEY' ]" 2>/dev/null; then
+                    warn "  ⚠️  Файлы сертификатов $CERT или $KEY недоступны или некорректны (каталог вместо файла) внутри контейнера $cname!"
+                    warn "  Пытаюсь принудительно исправить права доступа на хосте..."
+                    local certs_dir; certs_dir="$(_vgw_certs_dir)"
+                    chmod 755 "$certs_dir" 2>/dev/null || true
+                    chmod 644 "${certs_dir}/fullchain.pem" "${certs_dir}/privkey.pem" 2>/dev/null || true
+                    
+                    # Также пробуем сделать родительские папки на хосте доступными
+                    local p="$certs_dir"
+                    while [[ "$p" != "/" && -n "$p" ]]; do
+                        chmod o+x "$p" 2>/dev/null || true
+                        p=$(dirname "$p")
+                    done
+                    
+                    if ! docker exec "$cname" sh -c "[ -f '$CERT' ] && [ -r '$CERT' ] && [ -f '$KEY' ] && [ -r '$KEY' ]" 2>/dev/null; then
+                        printf_error "Критическая ошибка: Сертификаты недоступны или не являются файлами внутри контейнера $cname!"
+                        return 1
+                    fi
+                fi
             fi
 
             # ── Шаг 2: Инжект конфига через docker cp ───────────
