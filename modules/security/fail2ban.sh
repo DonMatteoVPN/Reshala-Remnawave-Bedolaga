@@ -58,6 +58,14 @@ import os
 import re
 import sys
 
+def clean_val(val):
+    if not val:
+        return ""
+    val = val.strip()
+    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+        val = val[1:-1].strip()
+    return val
+
 fpath = "/etc/fail2ban/jail.local"
 if not os.path.exists(fpath):
     sys.exit(0)
@@ -76,17 +84,17 @@ modified_content = original_content
 
 for section in config.sections():
     try:
-        is_enabled = config.has_option(section, 'enabled') and config.get(section, 'enabled').lower() == 'true'
+        is_enabled = config.has_option(section, 'enabled') and clean_val(config.get(section, 'enabled')).lower() == 'true'
         if not is_enabled:
             continue
 
         # Проверяем backend и logpath
-        backend_val = config.get(section, 'backend') if config.has_option(section, 'backend') else 'auto'
+        backend_val = clean_val(config.get(section, 'backend')) if config.has_option(section, 'backend') else 'auto'
         is_systemd = backend_val.lower() == 'systemd'
 
         # Если jail не использует systemd backend, валидируем его лог-файлы
         if not is_systemd:
-            logpath_val = config.get(section, 'logpath') if config.has_option(section, 'logpath') else None
+            logpath_val = clean_val(config.get(section, 'logpath')) if config.has_option(section, 'logpath') else None
             if not logpath_val or not logpath_val.strip():
                 # У джейла нет logpath! Отключаем джейл для безопасности
                 sys.stdout.write(f"[AUTO-DISABLE] Jail [{section}]: нет logpath. Отключаю jail.\n")
@@ -103,7 +111,7 @@ for section in config.sections():
                 modified_content = section_pattern.sub(disable_jail_section, modified_content)
                 continue
 
-            paths = [p.strip() for p in re.split(r'\s+', logpath_val.strip()) if p.strip()]
+            paths = [clean_val(p) for p in re.split(r'\s+', logpath_val.strip()) if p.strip()]
             valid_paths = []
             for path in paths:
                 if not path:
@@ -277,6 +285,8 @@ _f2b_get_jail_var() {
     END {
         if (found) {
             gsub(/\r/, "", val)
+            sub(/^['"]/, "", val)
+            sub(/['"]$/, "", val)
             print val
         }
     }
@@ -1265,6 +1275,12 @@ _f2b_detect_syslog() {
     local found_logs=()
     local selected_flags=()
 
+    # Удаляем кавычки из current_log
+    current_log="${current_log#\"}"
+    current_log="${current_log%\"}"
+    current_log="${current_log#\'}"
+    current_log="${current_log%\'}"
+
     if [[ -f "/var/log/syslog" ]]; then found_logs+=("/var/log/syslog"); fi
     if [[ -f "/var/log/messages" ]]; then found_logs+=("/var/log/messages"); fi
     if [[ -f "/var/log/auth.log" ]]; then found_logs+=("/var/log/auth.log"); fi
@@ -1275,9 +1291,17 @@ _f2b_detect_syslog() {
         found_logs+=("systemd")
     fi
 
-    # Парсим текущие логи
+    # Парсим текущие логи (пропуская заглушку /dev/null)
     if [[ -n "$current_log" && "$current_log" != "Не задан" ]]; then
         for cl in $current_log; do
+            # Удаляем внешние кавычки, если они есть
+            cl="${cl#\"}"
+            cl="${cl%\"}"
+            cl="${cl#\'}"
+            cl="${cl%\'}"
+            if [[ "$cl" == "/dev/null" || -z "$cl" ]]; then
+                continue
+            fi
             if [[ ! " ${found_logs[*]} " =~ " ${cl} " ]]; then
                 found_logs+=("$cl")
             fi
@@ -1289,7 +1313,11 @@ _f2b_detect_syslog() {
         local fpath="${found_logs[$i]}"
         local is_sel="false"
         if [[ -n "$current_log" && "$current_log" != "Не задан" ]]; then
-            if [[ " $current_log " == *" $fpath "* ]]; then
+            if [[ "$current_log" == "/dev/null" ]]; then
+                if [[ "$fpath" == "systemd" ]]; then
+                    is_sel="true"
+                fi
+            elif [[ " $current_log " == *" $fpath "* ]]; then
                 is_sel="true"
             fi
         else
