@@ -625,6 +625,165 @@ _vgw_smart_nginx_detect() {
     echo "unknown"
 }
 
+# ══════════════════════════════════════════════════════════════════
+# Поиск docker-compose.yml для конкретного контейнера.
+# Стратегия:
+#   1) com.docker.compose.project.working_dir label → ищем compose-файлы там
+#   2) Перебираем стандартные пути /opt/<name>/ /opt/<name>-*/ и т.п.
+#   3) Возвращаем ПЕРВЫЙ найденный docker-compose.yml (или docker-compose.yaml)
+# ══════════════════════════════════════════════════════════════════
+_vgw_find_compose_file() {
+    local cname="$1"
+    [[ -z "$cname" ]] && echo "" && return 1
+
+    # 1. Из label com.docker.compose.project.working_dir
+    local workdir
+    workdir=$(docker inspect "$cname" 2>/dev/null \
+        --format='{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null || echo "")
+    if [[ -n "$workdir" && -d "$workdir" ]]; then
+        for f in "${workdir}/docker-compose.yml" "${workdir}/docker-compose.yaml"\
+                  "${workdir}/compose.yml" "${workdir}/compose.yaml"; do
+            [[ -f "$f" ]] && echo "$f" && return 0
+        done
+    fi
+
+    # 2. Из label com.docker.compose.project → ищем в /opt/<project>/
+    local project_name
+    project_name=$(docker inspect "$cname" 2>/dev/null \
+        --format='{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || echo "")
+    if [[ -n "$project_name" ]]; then
+        for base in "/opt" "/srv" "/home" "/root"; do
+            for f in "${base}/${project_name}/docker-compose.yml" \
+                     "${base}/${project_name}/docker-compose.yaml" \
+                     "${base}/${project_name}/compose.yml"; do
+                [[ -f "$f" ]] && echo "$f" && return 0
+            done
+            # Fuzzy: /opt/<project>-*/ или /opt/*<project>*/
+            for d in "${base}/${project_name}"*/ "${base}/"*"${project_name}"*/; do
+                [[ -d "$d" ]] || continue
+                for f in "${d}docker-compose.yml" "${d}docker-compose.yaml" "${d}compose.yml"; do
+                    [[ -f "$f" ]] && echo "$f" && return 0
+                done
+            done
+        done
+    fi
+
+    # 3. Из имени контейнера (убираем суффиксы -1 / -nginx и т.п.)
+    local base_name; base_name=$(echo "$cname" | sed 's/-[0-9]*$//; s/-nginx$//; s/-admin$//')
+    for base in "/opt" "/srv" "/root"; do
+        for d in "${base}/${base_name}"*/ "${base}/"*"${base_name}"*/; do
+            [[ -d "$d" ]] || continue
+            for f in "${d}docker-compose.yml" "${d}docker-compose.yaml" "${d}compose.yml"; do
+                [[ -f "$f" ]] && echo "$f" && return 0
+            done
+        done
+    done
+
+    echo ""
+    return 1
+}
+
+# ══════════════════════════════════════════════════════════════════
+# Безопасное добавление volume в docker-compose.yml через Python.
+# Поддерживает:
+#   - многосервисный compose (добавляет только в нужный сервис по имени контейнера)
+#   - монолитный compose
+# Возвращает 0 при успехе, 1 если volume уже есть или ошибка
+# ══════════════════════════════════════════════════════════════════
+_vgw_compose_add_volume() {
+    local compose_file="$1"
+    local cname="$2"        # имя контейнера для поиска нужного сервиса
+    local host_path="$3"    # путь на хосте
+    local container_path="$4" # путь внутри контейнера
+    local mode="${5:-ro}"   # ro / rw
+
+    [[ -f "$compose_file" ]] || return 1
+
+    local py_bin; py_bin="$(_vgw_python)"
+
+    COMPOSE_FILE="$compose_file" CNAME="$cname" HOST_PATH="$host_path" \
+    CONTAINER_PATH="$container_path" VOLUME_MODE="$mode" \
+    "$py_bin" - <<'PY'
+import os, sys
+from pathlib import Path
+try:
+    import yaml
+except ImportError:
+    sys.exit(2)
+
+compose_path = Path(os.environ["COMPOSE_FILE"])
+cname = os.environ["CNAME"]
+host_path = os.environ["HOST_PATH"]
+container_path = os.environ["CONTAINER_PATH"]
+mode = os.environ.get("VOLUME_MODE", "ro")
+new_volume = f"{host_path}:{container_path}:{mode}"
+
+data = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+if not isinstance(data, dict):
+    sys.exit(1)
+
+services = data.get("services") or {}
+if not isinstance(services, dict):
+    sys.exit(1)
+
+# Ищем нужный сервис по container_name или по имени сервиса похожему на контейнер
+target_svc = None
+for svc_name, svc in services.items():
+    if not isinstance(svc, dict):
+        continue
+    if svc.get("container_name", "") == cname:
+        target_svc = svc_name
+        break
+
+# Если не нашли по container_name — ищем по совпадению имени сервиса
+if target_svc is None:
+    for svc_name in services:
+        if "nginx" in svc_name.lower() or cname.replace("-", "_") in svc_name.lower():
+            target_svc = svc_name
+            break
+
+# Последний вариант — берём первый сервис с nginx-образом
+if target_svc is None:
+    for svc_name, svc in services.items():
+        if isinstance(svc, dict):
+            img = str(svc.get("image", "")).lower()
+            if "nginx" in img:
+                target_svc = svc_name
+                break
+
+if target_svc is None:
+    print("SERVICE_NOT_FOUND")
+    sys.exit(1)
+
+svc = services[target_svc]
+volumes = svc.get("volumes") or []
+if not isinstance(volumes, list):
+    volumes = []
+
+# Проверяем: не добавлен ли уже этот volume?
+for v in volumes:
+    v_str = str(v) if not isinstance(v, dict) else f"{v.get('source','')}:{v.get('target','')}'"
+    if container_path in v_str:
+        print("ALREADY_EXISTS")
+        sys.exit(0)
+
+volumes.append(new_volume)
+svc["volumes"] = volumes
+services[target_svc] = svc
+data["services"] = services
+
+# Делаем backup
+bak_path = compose_path.with_suffix(".yml.bak")
+bak_path.write_text(compose_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+compose_path.write_text(
+    yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False),
+    encoding="utf-8"
+)
+print(f"ADDED:{target_svc}")
+PY
+}
+
 # Определяет источник SSL-сертификатов для найденного nginx-контейнера
 _vgw_detect_cert_source() {
     local container="${1:-}"
@@ -676,9 +835,10 @@ _vgw_find_nginx_conf_dir() {
 }
 
 # Генерирует nginx server-block для proxy_pass на наш gateway
-# Аргументы: public_domain gateway_port ssl_cert_path ssl_key_path
+# Аргументы: public_domain gateway_port ssl_cert_path ssl_key_path [csrc]
+# csrc используется для выбора правильных путей к сертификатам в конфиге
 _vgw_nginx_generate_conf() {
-    local domain="$1" gw_port="$2" cert="${3:-}" key="${4:-}"
+    local domain="$1" gw_port="$2" cert="${3:-}" key="${4:-}" csrc="${5:-}"
     local ssl_block
     if [[ -n "$cert" ]]; then
         ssl_block="    ssl_certificate     ${cert};"$'\n'"    ssl_certificate_key ${key};"
@@ -796,6 +956,7 @@ _vgw_detect_show_plan() {
     echo -e "  ${C}╠══════════════════════════════════════════════════════════════╣${E}"
     echo -e "  ${C}║${E}  📋  ${B}План действий:${E}"
 
+    local csrc_type_show; csrc_type_show=$(echo "$csrc" | cut -d: -f1)
     case "$ntype" in
         free)
             echo -e "  ${C}║${E}  1. Запустить edge-nginx контейнер на 80/443"
@@ -808,10 +969,19 @@ _vgw_detect_show_plan() {
             echo -e "  ${C}║${E}  3. Gateway запустится на порту ${G}${gport}${E}"
             ;;
         docker:conf.d:*)
-            echo -e "  ${C}║${E}  1. Создать ${G}${cpath}/80-bedolaga.conf${E}"
-            echo -e "  ${C}║${E}  2. docker exec ${cname} nginx -t"
-            echo -e "  ${C}║${E}  3. docker exec ${cname} nginx -s reload"
-            echo -e "  ${C}║${E}  4. Gateway на порту ${G}${gport}${E}"
+            if [[ "$csrc_type_show" == "certwarden" || "$csrc_type_show" == "letsencrypt" ]]; then
+                echo -e "  ${C}║${E}  1. ${G}Сертификаты уже смонтированы (${csrc_type_show})${E}"
+                echo -e "  ${C}║${E}  2. Создать ${G}${cpath}/80-bedolaga.conf${E}"
+                echo -e "  ${C}║${E}  3. docker exec ${cname} nginx -t && nginx -s reload"
+            else
+                echo -e "  ${C}║${E}  1. Найти docker-compose.yml контейнера ${G}${cname}${E}"
+                echo -e "  ${C}║${E}  2. ${G}Автоматически добавить volume сертификатов${E}"
+                echo -e "  ${C}║${E}     ${G}$(_vgw_certs_dir):/etc/nginx/certs:ro${E}"
+                echo -e "  ${C}║${E}  3. Перезапустить контейнер ${G}${cname}${E}"
+                echo -e "  ${C}║${E}  4. Создать ${G}${cpath}/80-bedolaga.conf${E}"
+                echo -e "  ${C}║${E}  5. docker exec ${cname} nginx -t && nginx -s reload"
+            fi
+            echo -e "  ${C}║${E}  Gateway на порту ${G}${gport}${E}"
             ;;
         *)
             echo -e "  ${C}║${E}  Требуется ручная настройка."
@@ -822,6 +992,212 @@ _vgw_detect_show_plan() {
     echo -e "  ${C}╚══════════════════════════════════════════════════════════════╝${E}"
     echo ""
     ask_yes_no "Выполнить автоматически? (y/n)" "y"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# Разрешает реальные пути к SSL-сертификатам внутри контейнера
+# с учётом csrc (certwarden / letsencrypt / reshala / none)
+# Устанавливает переменные CERT и KEY (пути внутри nginx)
+# ══════════════════════════════════════════════════════════════════
+_vgw_resolve_ssl_paths() {
+    local cname="$1" csrc="$2"
+    local csrc_type csrc_host csrc_cont
+    csrc_type=$(echo "$csrc" | cut -d: -f1)
+    csrc_host=$(echo  "$csrc" | cut -d: -f2)
+    csrc_cont=$(echo  "$csrc" | cut -d: -f3)
+
+    case "$csrc_type" in
+        certwarden)
+            # Уже смонтирован certwarden — используем путь внутри контейнера
+            CERT="${csrc_cont}/fullchain.pem"
+            KEY="${csrc_cont}/privkey.pem"
+            VOLUME_NEEDED="0"    # volume уже есть
+            ;;
+        letsencrypt)
+            # LE смонтирован в контейнер — используем наши cert-ы (reshala путь)
+            # т.к. LE live/<domain>/... требует знать имя домена,
+            # проще смонтировать наши reshala-сертификаты отдельно
+            CERT="/etc/nginx/certs/fullchain.pem"
+            KEY="/etc/nginx/certs/privkey.pem"
+            VOLUME_NEEDED="1"
+            VOLUME_HOST="$(_vgw_certs_dir)"
+            VOLUME_CONT="/etc/nginx/certs"
+            ;;
+        reshala)
+            CERT="/etc/nginx/certs/fullchain.pem"
+            KEY="/etc/nginx/certs/privkey.pem"
+            VOLUME_NEEDED="1"
+            VOLUME_HOST="$(_vgw_certs_dir)"
+            VOLUME_CONT="/etc/nginx/certs"
+            ;;
+        none|*)
+            CERT="/etc/nginx/certs/fullchain.pem"
+            KEY="/etc/nginx/certs/privkey.pem"
+            VOLUME_NEEDED="1"
+            VOLUME_HOST="$(_vgw_certs_dir)"
+            VOLUME_CONT="/etc/nginx/certs"
+            ;;
+    esac
+}
+
+# ══════════════════════════════════════════════════════════════════
+# Добавляет volume и acme-challenge volume в docker-compose.yml
+# контейнера и перезапускает его если volumes изменились.
+# Возвращает 0 если контейнер готов к инжекту конфига.
+# ══════════════════════════════════════════════════════════════════
+_vgw_ensure_container_volumes() {
+    local cname="$1"
+    local volume_host="$2"     # хост путь к сертификатам
+    local volume_cont="$3"     # контейнер путь к сертификатам
+    local acme_host="$(_vgw_project_dir)/edge/acme-challenge"
+    local acme_cont="/var/www/acme-challenge"
+
+    info "Ищу docker-compose.yml для контейнера ${cname}..."
+    local compose_file
+    compose_file=$(_vgw_find_compose_file "$cname")
+
+    if [[ -z "$compose_file" ]]; then
+        warn "Не удалось найти docker-compose.yml для ${cname}."
+        warn "Volume для сертификатов нужно добавить вручную:"
+        warn "  - ${volume_host}:${volume_cont}:ro"
+        return 1
+    fi
+
+    ok "Найден: ${compose_file}"
+    local compose_dir
+    compose_dir=$(dirname "$compose_file")
+
+    local cert_result acme_result
+    # Добавляем volume сертификатов
+    cert_result=$(COMPOSE_FILE="$compose_file" CNAME="$cname" \
+        HOST_PATH="$volume_host" CONTAINER_PATH="$volume_cont" VOLUME_MODE="ro" \
+        "$(_vgw_python)" - <<'PY'
+import os, sys
+from pathlib import Path
+try:
+    import yaml
+except ImportError:
+    sys.exit(2)
+compose_path = Path(os.environ["COMPOSE_FILE"])
+cname = os.environ["CNAME"]
+host_path = os.environ["HOST_PATH"]
+container_path = os.environ["CONTAINER_PATH"]
+mode = os.environ.get("VOLUME_MODE", "ro")
+new_volume = f"{host_path}:{container_path}:{mode}"
+data = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+if not isinstance(data, dict): sys.exit(1)
+services = data.get("services") or {}
+if not isinstance(services, dict): sys.exit(1)
+target_svc = None
+for svc_name, svc in services.items():
+    if not isinstance(svc, dict): continue
+    if svc.get("container_name", "") == cname:
+        target_svc = svc_name; break
+if target_svc is None:
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict): continue
+        img = str(svc.get("image", "")).lower()
+        if "nginx" in img or "nginx" in svc_name.lower():
+            target_svc = svc_name; break
+if target_svc is None:
+    print("SERVICE_NOT_FOUND"); sys.exit(1)
+svc = services[target_svc]
+vols = svc.get("volumes") or []
+if not isinstance(vols, list): vols = []
+for v in vols:
+    if container_path in str(v):
+        print("ALREADY_EXISTS"); sys.exit(0)
+vols.append(new_volume)
+svc["volumes"] = vols; services[target_svc] = svc; data["services"] = services
+bak = compose_path.with_suffix(".yml.bak")
+bak.write_text(compose_path.read_text(encoding="utf-8"), encoding="utf-8")
+compose_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False), encoding="utf-8")
+print(f"ADDED:{target_svc}")
+PY
+    2>/dev/null || echo "ERROR")
+
+    # Добавляем acme-challenge volume
+    acme_result=$(COMPOSE_FILE="$compose_file" CNAME="$cname" \
+        HOST_PATH="$acme_host" CONTAINER_PATH="$acme_cont" VOLUME_MODE="ro" \
+        "$(_vgw_python)" - <<'PY'
+import os, sys
+from pathlib import Path
+try:
+    import yaml
+except ImportError:
+    sys.exit(2)
+compose_path = Path(os.environ["COMPOSE_FILE"])
+cname = os.environ["CNAME"]
+host_path = os.environ["HOST_PATH"]
+container_path = os.environ["CONTAINER_PATH"]
+mode = os.environ.get("VOLUME_MODE", "ro")
+new_volume = f"{host_path}:{container_path}:{mode}"
+data = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+if not isinstance(data, dict): sys.exit(1)
+services = data.get("services") or {}
+target_svc = None
+for svc_name, svc in services.items():
+    if not isinstance(svc, dict): continue
+    if svc.get("container_name", "") == cname:
+        target_svc = svc_name; break
+if target_svc is None:
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict): continue
+        img = str(svc.get("image", "")).lower()
+        if "nginx" in img or "nginx" in svc_name.lower():
+            target_svc = svc_name; break
+if target_svc is None:
+    print("SKIP"); sys.exit(0)
+svc = services[target_svc]
+vols = svc.get("volumes") or []
+for v in vols:
+    if container_path in str(v):
+        print("ALREADY_EXISTS"); sys.exit(0)
+vols.append(new_volume)
+svc["volumes"] = vols; services[target_svc] = svc; data["services"] = services
+compose_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False), encoding="utf-8")
+print(f"ADDED:{target_svc}")
+PY
+    2>/dev/null || echo "SKIP")
+
+    local need_restart=0
+    if [[ "$cert_result" == ADDED:* ]]; then
+        ok "Volume сертификатов добавлен в ${compose_file}"
+        need_restart=1
+    elif [[ "$cert_result" == "ALREADY_EXISTS" ]]; then
+        ok "Volume сертификатов уже смонтирован — перезапуск не нужен."
+    elif [[ "$cert_result" == "ERROR" || "$cert_result" == "SERVICE_NOT_FOUND" ]]; then
+        warn "Не удалось добавить volume в ${compose_file}: ${cert_result}"
+        return 1
+    fi
+    [[ "$acme_result" == ADDED:* ]] && ok "Volume acme-challenge добавлен."
+
+    if [[ "$need_restart" -eq 1 ]]; then
+        info "Перезапускаю контейнер ${cname} чтобы применить новые volumes..."
+        # Определяем команду compose
+        local dc_cmd="docker compose"
+        command -v docker-compose &>/dev/null && ! docker compose version &>/dev/null && dc_cmd="docker-compose"
+
+        # Перезапускаем только нужный сервис (не весь стек)
+        local svc_name; svc_name=$(echo "$cert_result" | cut -d: -f2-)
+        if [[ -n "$svc_name" && "$svc_name" != "$cert_result" ]]; then
+            ( cd "$compose_dir" && $dc_cmd up -d "$svc_name" 2>&1 ) || {
+                warn "docker compose up -d ${svc_name} не прошёл. Пробую restart..."
+                ( cd "$compose_dir" && $dc_cmd restart "$svc_name" 2>&1 ) || true
+            }
+        else
+            # Fallback: перезапускаем весь compose
+            ( cd "$compose_dir" && $dc_cmd up -d 2>&1 ) || true
+        fi
+        # Ждём пока nginx запустится
+        local attempts=0
+        while [[ $attempts -lt 10 ]]; do
+            docker exec "$cname" nginx -v &>/dev/null && break
+            sleep 1; ((attempts++))
+        done
+        ok "Контейнер ${cname} перезапущен с новыми volumes."
+    fi
+    return 0
 }
 
 # Авто-инжект nginx конфига. Возвращает 0 при успехе, 1 при ошибке.
@@ -851,12 +1227,15 @@ _vgw_nginx_inject_auto() {
         return 1
     fi
 
+    # ── Определяем пути к сертификатам ──────────────────────────
+    local CERT KEY VOLUME_NEEDED VOLUME_HOST VOLUME_CONT
+    VOLUME_NEEDED="0" VOLUME_HOST="" VOLUME_CONT=""
     if [[ -n "$cname" ]]; then
-        cert="/etc/nginx/certs/fullchain.pem"
-        key="/etc/nginx/certs/privkey.pem"
+        _vgw_resolve_ssl_paths "$cname" "$csrc"
     else
-        cert="$(_vgw_certs_dir)/fullchain.pem"
-        key="$(_vgw_certs_dir)/privkey.pem"
+        CERT="$(_vgw_certs_dir)/fullchain.pem"
+        KEY="$(_vgw_certs_dir)/privkey.pem"
+        VOLUME_NEEDED="0"
     fi
 
     case "$ntype" in
@@ -865,7 +1244,7 @@ _vgw_nginx_inject_auto() {
             cdir=$(_vgw_find_nginx_conf_dir)
             conf_file="${cdir}/${domain}.conf"
             info "Создаю ${conf_file}..."
-            _vgw_nginx_generate_conf "$domain" "$gport" "$cert" "$key" > "$conf_file" || {
+            _vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" > "$conf_file" || {
                 printf_error "Не удалось создать ${conf_file}"; return 1
             }
             # Если sites-available → создаём симлинк в sites-enabled
@@ -883,23 +1262,54 @@ _vgw_nginx_inject_auto() {
 
         docker:conf.d:*)
             local conf_host="${cpath}/80-bedolaga.conf"
+
+            # ── Шаг 1: Убеждаемся что volumes смонтированы ──────
+            if [[ "$VOLUME_NEEDED" == "1" ]]; then
+                info "Проверяю/добавляю volume сертификатов в docker-compose.yml..."
+                if ! _vgw_ensure_container_volumes "$cname" "$VOLUME_HOST" "$VOLUME_CONT"; then
+                    warn "Не удалось автоматически добавить volume. Продолжаю без него..."
+                    # Используем временный snakeoil чтобы хоть что-то работало
+                    CERT="/etc/ssl/certs/ssl-cert-snakeoil.pem"
+                    KEY="/etc/ssl/private/ssl-cert-snakeoil.key"
+                fi
+            fi
+
+            # ── Шаг 2: Создаём конфиг nginx ─────────────────────
             info "Создаю ${conf_host}..."
-            _vgw_nginx_generate_conf "$domain" "$gport" "$cert" "$key" > "$conf_host" || {
+            _vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" > "$conf_host" || {
                 printf_error "Не удалось создать ${conf_host}"; return 1
             }
-            if ! docker exec "$cname" nginx -t 2>/dev/null; then
+
+            # ── Шаг 3: Проверяем конфиг nginx внутри контейнера ─
+            local nginx_test_output
+            nginx_test_output=$(docker exec "$cname" nginx -t 2>&1)
+            if [[ $? -ne 0 ]]; then
                 printf_error "nginx -t в контейнере ОШИБКА! Откатываю..."
+                warn "Вывод nginx -t:"
+                echo "$nginx_test_output" | head -20 | sed 's/^/  /'
                 rm -f "$conf_host"
+                # Восстанавливаем backup docker-compose.yml если он был создан
+                local compose_file; compose_file=$(_vgw_find_compose_file "$cname")
+                [[ -f "${compose_file}.bak" ]] && cp -f "${compose_file}.bak" "$compose_file" 2>/dev/null || true
                 return 1
             fi
+
+            # ── Шаг 4: Reload nginx ──────────────────────────────
             docker exec "$cname" nginx -s reload && ok "Docker nginx (${cname}) перезагружен!" || return 1
             _vgw_nginx_injection_save "docker:conf.d" "$conf_host" "$domain"
             ;;
 
         docker:nginx:*)
-            # Инжектируем через docker cp
+            # Прочий docker nginx: инжект через docker cp
+            # ── Шаг 1: Проверяем/добавляем volumes ──────────────
+            if [[ "$VOLUME_NEEDED" == "1" ]]; then
+                info "Проверяю/добавляю volume сертификатов в docker-compose.yml..."
+                _vgw_ensure_container_volumes "$cname" "$VOLUME_HOST" "$VOLUME_CONT" || true
+            fi
+
+            # ── Шаг 2: Инжект конфига через docker cp ───────────
             local tmp_conf="/tmp/_bedolaga_${domain}.conf"
-            _vgw_nginx_generate_conf "$domain" "$gport" "$cert" "$key" > "$tmp_conf"
+            _vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" > "$tmp_conf"
             docker cp "$tmp_conf" "${cname}:/etc/nginx/conf.d/80-bedolaga.conf" || return 1
             rm -f "$tmp_conf"
             docker exec "$cname" nginx -t && docker exec "$cname" nginx -s reload || return 1
@@ -934,15 +1344,18 @@ _vgw_nginx_manual_guide() {
 
     local cert="" key=""
     if [[ -n "$cname" ]]; then
-        cert="/etc/nginx/certs/fullchain.pem"
-        key="/etc/nginx/certs/privkey.pem"
+        # Используем умное определение путей на основе csrc
+        local CERT KEY VOLUME_NEEDED VOLUME_HOST VOLUME_CONT
+        VOLUME_NEEDED="0"
+        _vgw_resolve_ssl_paths "$cname" "$csrc"
+        cert="$CERT"; key="$KEY"
     else
         cert="$(_vgw_certs_dir)/fullchain.pem"
         key="$(_vgw_certs_dir)/privkey.pem"
     fi
 
     local conf_content
-    conf_content=$(_vgw_nginx_generate_conf "$domain" "$gport" "$cert" "$key")
+    conf_content=$(_vgw_nginx_generate_conf "$domain" "$gport" "$cert" "$key" "$csrc")
 
     local is_fallback="0"
     local fallback_cfg=""
@@ -1149,15 +1562,52 @@ EOF
             ;;
 
         docker:conf.d:*)
-            echo -e "  ${B}Шаг 1${E}: Создайте файл в папке conf.d"
-            echo -e "  ${G}  nano ${cpath}/80-bedolaga.conf${E}"
-            echo ""
-            echo -e "  ${B}Шаг 2${E}: Вставьте содержимое:"
+            if [[ "$docker_mount_notice" == "1" ]]; then
+                # Volume нужен — показываем полную процедуру
+                local compose_hint
+                compose_hint=$(_vgw_find_compose_file "$cname" 2>/dev/null || echo "")
+                echo -e "  ${G}${B}🐳 ШАГИ ДЛЯ DOCKER NGINX (${cname}):${E}"
+                echo ""
+                echo -e "  ${B}Шаг 1${E}: Добавьте volume сертификатов в docker-compose.yml"
+                if [[ -n "$compose_hint" ]]; then
+                    echo -e "  ${G}  nano ${compose_hint}${E}"
+                else
+                    echo -e "  ${G}  nano /путь/к/вашему/docker-compose.yml${E}  ${W}(найдите его по названию сервиса ${cname})${E}"
+                fi
+                echo ""
+                echo -e "  Найдите сервис nginx и добавьте в секцию ${B}volumes:${E}:"
+                echo -e "  ${G}       - $(_vgw_certs_dir):/etc/nginx/certs:ro${E}"
+                echo -e "  ${G}       - $(_vgw_project_dir)/edge/acme-challenge:/var/www/acme-challenge:ro${E}"
+                echo ""
+                echo -e "  ${B}Шаг 2${E}: Перезапустите только nginx-сервис"
+                if [[ -n "$compose_hint" ]]; then
+                    local _cdir; _cdir=$(dirname "$compose_hint")
+                    echo -e "  ${G}  cd ${_cdir}${E}"
+                fi
+                echo -e "  ${G}  docker compose up -d <имя-сервиса-nginx>${E}"
+                echo ""
+                echo -e "  ${B}Шаг 3${E}: Создайте файл конфига Bedolaga"
+                echo -e "  ${G}  nano ${cpath}/80-bedolaga.conf${E}"
+                echo ""
+                echo -e "  ${B}Шаг 4${E}: Вставьте содержимое:"
+            else
+                # certwarden/letsencrypt уже смонтированы — сразу к конфигу
+                echo -e "  ✅ Сертификаты уже смонтированы (${csrc_type}). Только создать конфиг."
+                echo ""
+                echo -e "  ${B}Шаг 1${E}: Создайте файл конфига Bedolaga"
+                echo -e "  ${G}  nano ${cpath}/80-bedolaga.conf${E}"
+                echo ""
+                echo -e "  ${B}Шаг 2${E}: Вставьте содержимое:"
+            fi
             echo "  ────────────────────────────────────────────────────"
             echo "$conf_content" | sed 's/^/  /'
             echo "  ────────────────────────────────────────────────────"
             echo ""
-            echo -e "  ${B}Шаг 3${E}: Проверьте и перезагрузите nginx"
+            if [[ "$docker_mount_notice" == "1" ]]; then
+                echo -e "  ${B}Шаг 5${E}: Проверьте и перезагрузите nginx"
+            else
+                echo -e "  ${B}Шаг 3${E}: Проверьте и перезагрузите nginx"
+            fi
             echo -e "  ${G}  docker exec ${cname} nginx -t${E}"
             echo -e "  ${G}  docker exec ${cname} nginx -s reload${E}"
             ;;
