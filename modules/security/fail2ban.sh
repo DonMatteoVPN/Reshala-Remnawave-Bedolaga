@@ -10,13 +10,13 @@ F2B_WHITELIST_FILE="/etc/reshala/fail2ban-whitelist.txt"
 
 _f2b_is_service_active() {
     # Check via systemctl first
-    if systemctl is-active --quiet fail2ban &>/dev/null; then
+    if run_cmd systemctl is-active --quiet fail2ban &>/dev/null; then
         return 0
     fi
     # Fallback to fail2ban-client ping
     if command -v fail2ban-client &>/dev/null; then
         local ping_res
-        ping_res=$(fail2ban-client ping 2>/dev/null)
+        ping_res=$(run_cmd fail2ban-client ping 2>/dev/null)
         if [[ "$ping_res" == *"Server replied: pong"* ]]; then
             return 0
         fi

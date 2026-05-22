@@ -54,7 +54,7 @@ show_full_security_status() {
     print_section_title "Fail2Ban"
     if ! command -v fail2ban-client &> /dev/null; then
         print_key_value "Статус" "${C_YELLOW}Не установлен${C_RESET}" "$LABEL_WIDTH"
-    elif ! systemctl is-active --quiet fail2ban 2>/dev/null; then
+    elif ! run_cmd systemctl is-active --quiet fail2ban 2>/dev/null; then
         print_key_value "Статус" "${C_RED}Сервис не активен${C_RESET}" "$LABEL_WIDTH"
     else
         local banned
@@ -65,9 +65,9 @@ show_full_security_status() {
 
     # --- Geo-Block ---
     print_section_title "Geo-Block"
-    if command -v ipset &>/dev/null && ipset list reshala_geoblock -terse &>/dev/null 2>&1; then
+    if command -v ipset &>/dev/null && run_cmd ipset list reshala_geoblock -terse &>/dev/null 2>&1; then
         local geo_count
-        geo_count=$(ipset list reshala_geoblock -terse 2>/dev/null | grep -Fi "Number of entries:" | awk '{print $4}' || echo "0")
+        geo_count=$(run_cmd ipset list reshala_geoblock -terse 2>/dev/null | grep -Fi "Number of entries:" | awk '{print $4}' || echo "0")
         print_key_value "Статус" "${C_GREEN}Активен${C_RESET}" "$LABEL_WIDTH"
         print_key_value "Заблокировано подсетей" "${geo_count}" "$LABEL_WIDTH"
     else
@@ -135,11 +135,11 @@ show_full_security_status_bot() {
     output+="*Firewall (UFW)*\n"
     if ! command -v ufw &> /dev/null; then
         output+="Статус: *Не установлен*\n\n"
-    elif ufw status 2>/dev/null | grep -q "inactive"; then
+    elif run_cmd ufw status 2>/dev/null | grep -q "inactive"; then
         output+="Статус: *Не активен*\n\n"
     else
         local rules_count
-        rules_count=$(ufw status 2>/dev/null | grep -c "ALLOW")
+        rules_count=$(run_cmd ufw status 2>/dev/null | grep -c "ALLOW")
         output+="Статус: *Активен* (${rules_count} правил)\n\n"
     fi
     
@@ -147,11 +147,11 @@ show_full_security_status_bot() {
     output+="*Fail2Ban*\n"
     if ! command -v fail2ban-client &> /dev/null; then
         output+="Статус: *Не установлен*\n\n"
-    elif ! systemctl is-active --quiet fail2ban 2>/dev/null; then
+    elif ! run_cmd systemctl is-active --quiet fail2ban 2>/dev/null; then
         output+="Статус: *Сервис не активен*\n\n"
     else
         local banned
-        banned=$(fail2ban-client status sshd 2>/dev/null | grep "Currently banned" | awk '{print $4}')
+        banned=$(run_cmd fail2ban-client status sshd 2>/dev/null | grep "Currently banned" | awk '{print $4}')
         output+="Статус: *Активен*\n"
         output+="Сейчас забанено (sshd): \`${banned:-0}\`\n\n"
     fi

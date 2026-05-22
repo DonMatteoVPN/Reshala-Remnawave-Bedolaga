@@ -348,7 +348,7 @@ except Exception as e:
 PYEOF
 
     # Перезапускаем или перезагружаем Fail2Ban в зависимости от статуса
-    if systemctl is-active --quiet fail2ban; then
+    if run_cmd systemctl is-active --quiet fail2ban; then
         run_cmd systemctl reload fail2ban 2>/dev/null || run_cmd systemctl restart fail2ban 2>/dev/null || true
     else
         run_cmd systemctl start fail2ban 2>/dev/null || true

@@ -877,9 +877,11 @@ _geo_activate() {
                 
                 local count=0
                 if [[ -f "$zone_file" ]]; then
-                    count=$(grep -c "^[0-9]" "$zone_file" || echo "0")
+                    # Strict validation for IPv4 and CIDR subnet format to skip truncated/malformed lines
+                    count=$(grep -c -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$" "$zone_file" 2>/dev/null)
+                    count=${count:-0}
                     if [[ "$count" -gt 0 ]]; then
-                        awk -v set_name="$temp_ipset" '/^[0-9]/ {print "add " set_name " " $1 " -exist"}' "$zone_file" >> "$temp_dir/restore.txt"
+                        awk -v set_name="$temp_ipset" '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print "add " set_name " " $1 " -exist"}' "$zone_file" >> "$temp_dir/restore.txt"
                         subnets_total=$((subnets_total + count))
                     else
                         skipped_countries+=("$country")
