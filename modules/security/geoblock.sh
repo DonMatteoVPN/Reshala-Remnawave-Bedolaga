@@ -81,18 +81,20 @@ show_geoblock_menu() {
         echo ""
 
         local choice
-        choice=$(safe_read "Выберите действие" "") || { break; }
+        choice=$(safe_read "Выберите действие" "") || { return 2; }
 
+        local ret=0
         case "$choice" in
-            1) _geo_activate; wait_for_enter;;
-            2) _geo_deactivate; wait_for_enter;;
-            3) _geo_manage_countries;;
-            4) _geo_show_stats; wait_for_enter;;
-            5) _geo_test_ip; wait_for_enter;;
-            6) _geo_toggle_auto_update; wait_for_enter;;
-            b|B) break;;
-            *) warn "Неверный выбор";;
+            1) _geo_activate; ret=$?;;
+            2) _geo_deactivate; ret=$?;;
+            3) _geo_manage_countries; ret=$?;;
+            4) _geo_show_stats; ret=$?;;
+            5) _geo_test_ip; ret=$?;;
+            6) _geo_toggle_auto_update; ret=$?;;
+            b|B) return 2;;
+            *) warn "Неверный выбор"; ret=2;;
         esac
+        [[ $ret -ne 2 ]] && wait_for_enter
         disable_graceful_ctrlc
     done
 }
@@ -503,7 +505,7 @@ _geo_manage_countries() {
             case "$token" in
                 b|B)
                     if ask_yes_no "Выйти без сохранения изменений?"; then
-                        break
+                        return 2
                     fi
                     handled_command=1
                     ;;
@@ -860,11 +862,22 @@ _geo_activate() {
             local zone_url="https://www.ipdeny.com/ipblocks/data/aggregated/${country,,}-aggregated.zone"
             
             (
-                curl -s --max-time 15 "$zone_url" > "$temp_dir/$country.zone"
-                # Fallback если файл пуст или скачался html/ошибка
-                if [[ ! -s "$temp_dir/$country.zone" ]] || ! grep -q "^[0-9]" "$temp_dir/$country.zone"; then
-                    curl -s --max-time 15 "https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/master/ipv4/${country,,}.cidr" > "$temp_dir/$country.zone"
+                local tmp_file="$temp_dir/${country}_raw.zone"
+                # Tier 1: IPDeny Aggregated
+                curl -s --max-time 15 "$zone_url" > "$tmp_file"
+                # Fallback to Tier 2: IPVerse Country Aggregated
+                if [[ ! -s "$tmp_file" ]] || ! tr -d '\r' < "$tmp_file" | grep -q "^[0-9]"; then
+                    curl -s --max-time 15 "https://raw.githubusercontent.com/ipverse/country-ip-blocks/master/country/${country,,}/ipv4-aggregated.txt" > "$tmp_file"
                 fi
+                # Fallback to Tier 3: IPDeny Standard Countries
+                if [[ ! -s "$tmp_file" ]] || ! tr -d '\r' < "$tmp_file" | grep -q "^[0-9]"; then
+                    curl -s --max-time 15 "https://www.ipdeny.com/ipblocks/data/countries/${country,,}.zone" > "$tmp_file"
+                fi
+                # Clean up and save to final zone file
+                if [[ -s "$tmp_file" ]]; then
+                    tr -d '\r' < "$tmp_file" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -E '^[0-9]' > "$temp_dir/$country.zone"
+                fi
+                rm -f "$tmp_file"
             ) &
             local new_pid=$!
             pids+=("$new_pid")
@@ -1229,11 +1242,17 @@ while IFS= read -r country || [[ -n "$country" ]]; do
     [[ -z "$country" ]] && continue
     
     ZONE_DATA=$(curl -s --max-time 15 "https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone" 2>/dev/null)
-    if [[ -z "$ZONE_DATA" ]] || ! echo "$ZONE_DATA" | grep -q "^[0-9]"; then
-        ZONE_DATA=$(curl -s --max-time 15 "https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/master/ipv4/${country}.cidr" 2>/dev/null)
+    if [[ -z "$ZONE_DATA" ]] || ! echo "$ZONE_DATA" | tr -d '\r' | grep -q "^[0-9]"; then
+        ZONE_DATA=$(curl -s --max-time 15 "https://raw.githubusercontent.com/ipverse/country-ip-blocks/master/country/${country}/ipv4-aggregated.txt" 2>/dev/null)
+    fi
+    if [[ -z "$ZONE_DATA" ]] || ! echo "$ZONE_DATA" | tr -d '\r' | grep -q "^[0-9]"; then
+        ZONE_DATA=$(curl -s --max-time 15 "https://www.ipdeny.com/ipblocks/data/countries/${country}.zone" 2>/dev/null)
     fi
     if [[ -n "$ZONE_DATA" ]]; then
-        echo "$ZONE_DATA" | awk -v set_name="${GEO_IPSET_NAME}" '/^[0-9]/ {print "add " set_name " " $1 " -exist"}' >> "$TEMP_RESTORE"
+        ZONE_DATA=$(echo "$ZONE_DATA" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -E '^[0-9]')
+        if [[ -n "$ZONE_DATA" ]]; then
+            echo "$ZONE_DATA" | awk -v set_name="${GEO_IPSET_NAME}" '/^[0-9]/ {print "add " set_name " " $1 " -exist"}' >> "$TEMP_RESTORE"
+        fi
     fi
 done < "$GEO_COUNTRIES_FILE"
 
@@ -1440,10 +1459,18 @@ ipset create "$temp_ipset" hash:net hashsize 65536 maxelem 500000
 subnets_total=0
 for country in "${countries[@]}"; do
     zone_url="https://www.ipdeny.com/ipblocks/data/aggregated/${country,,}-aggregated.zone"
-    curl -s --max-time 15 "$zone_url" > "$temp_dir/$country.zone"
-    if [[ ! -s "$temp_dir/$country.zone" ]] || ! grep -q "^[0-9]" "$temp_dir/$country.zone"; then
-        curl -s --max-time 15 "https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/master/ipv4/${country,,}.cidr" > "$temp_dir/$country.zone"
+    tmp_file="$temp_dir/${country}_raw.zone"
+    curl -s --max-time 15 "$zone_url" > "$tmp_file"
+    if [[ ! -s "$tmp_file" ]] || ! tr -d '\r' < "$tmp_file" | grep -q "^[0-9]"; then
+        curl -s --max-time 15 "https://raw.githubusercontent.com/ipverse/country-ip-blocks/master/country/${country,,}/ipv4-aggregated.txt" > "$tmp_file"
     fi
+    if [[ ! -s "$tmp_file" ]] || ! tr -d '\r' < "$tmp_file" | grep -q "^[0-9]"; then
+        curl -s --max-time 15 "https://www.ipdeny.com/ipblocks/data/countries/${country,,}.zone" > "$tmp_file"
+    fi
+    if [[ -s "$tmp_file" ]]; then
+        tr -d '\r' < "$tmp_file" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -E '^[0-9]' > "$temp_dir/$country.zone"
+    fi
+    rm -f "$tmp_file"
     if [[ -f "$temp_dir/$country.zone" ]]; then
         count=$(grep -c "^[0-9]" "$temp_dir/$country.zone" || echo "0")
         if [[ "$count" -gt 0 ]]; then

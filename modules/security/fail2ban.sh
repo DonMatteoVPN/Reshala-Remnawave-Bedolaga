@@ -218,8 +218,6 @@ show_fail2ban_menu() {
             printf_menu_option "3" "Забанить IP вручную"
             printf_menu_option "4" "🛡️  Белый список (Whitelist)  ${wl_status}"
             printf_menu_option "5" "⚙️ Настройки (бан, доп. защита)"
-            print_separator "-" 40
-            printf_menu_option "6" "🔔 Уведомления Telegram"
             echo ""
             printf_menu_option "s" "Перезапустить сервис"
             printf_menu_option "r" "🔄 Полная переустановка (очистка + установка)" "${C_YELLOW}"
@@ -238,7 +236,6 @@ show_fail2ban_menu() {
             3) _f2b_ban_ip; wait_for_enter;;
             4) _f2b_whitelist_menu; wait_for_enter;;
             5) _f2b_settings_menu;;
-            6) _f2b_notifications_menu; wait_for_enter;;
             i|I) _f2b_setup; wait_for_enter;;
             r|R)
                 if ! command -v fail2ban-client &> /dev/null && ! dpkg -l fail2ban &>/dev/null 2>&1; then
@@ -343,18 +340,39 @@ _f2b_check_status() {
 
 _f2b_show_banned() {
     print_separator
-    info "Список забаненных IP (sshd jail)"
+    info "Список забаненных IP"
     print_separator
     
-    local banned_list
-    banned_list=$(run_cmd fail2ban-client status sshd 2>/dev/null | grep "Banned IP list" | cut -d: -f2)
-    
-    if [[ -n "$banned_list" ]]; then
-        for ip in $banned_list; do
-            printf_description "● $ip"
+    local jails_list; jails_list=$(run_cmd fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d: -f2 | sed 's/,//g' | xargs)
+    if [[ -z "$jails_list" ]]; then
+        warn "Нет активных защит (jails)."
+        return
+    fi
+
+    local -A banned_ips
+    for jail in $jails_list; do
+        local jail_banned
+        jail_banned=$(run_cmd fail2ban-client status "$jail" 2>/dev/null | grep "Banned IP list" | cut -d: -f2)
+        for ip in $jail_banned; do
+            if [[ -n "${banned_ips[$ip]}" ]]; then
+                banned_ips[$ip]+=", $jail"
+            else
+                banned_ips[$ip]="$jail"
+            fi
+        done
+    done
+
+    if [[ ${#banned_ips[@]} -gt 0 ]]; then
+        for ip in "${!banned_ips[@]}"; do
+            local jails="${banned_ips[$ip]}"
+            if [[ "$jails" == *","* ]]; then
+                printf_description "● $ip ${C_RED}[Забанен в нескольких списках: $jails]${C_RESET}"
+            else
+                printf_description "● $ip ${C_GRAY}(в списке: $jails)${C_RESET}"
+            fi
         done
     else
-        ok "Сейчас нет забаненных IP в sshd jail."
+        ok "Сейчас нет забаненных IP."
     fi
 }
 
@@ -370,16 +388,18 @@ _f2b_unban_ip() {
         return
     fi
 
-    if run_cmd fail2ban-client set sshd unbanip "$ip_to_unban"; then
-        ok "IP $ip_to_unban разбанен в sshd jail."
-    else
-        err "Не удалось разбанить IP $ip_to_unban. Проверьте, забанен ли он."
-    fi
+    local jails_list; jails_list=$(run_cmd fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d: -f2 | sed 's/,//g' | xargs)
+    for jail in $jails_list; do
+        run_cmd fail2ban-client set "$jail" unbanip "$ip_to_unban" &>/dev/null || true
+    done
+    run_cmd fail2ban-client unban "$ip_to_unban" &>/dev/null || true
+
+    ok "Команда разбана IP $ip_to_unban отправлена во все активные защиты."
 }
 
 _f2b_ban_ip() {
     print_separator
-    info "Забанить IP вручную"
+    info "Забанить IP вручную во всех защитах"
     print_separator
 
     local ip_to_ban
@@ -389,10 +409,14 @@ _f2b_ban_ip() {
         return
     fi
 
-    if run_cmd fail2ban-client set sshd banip "$ip_to_ban"; then
-        ok "IP $ip_to_ban забанен в sshd jail."
+    local jails_list; jails_list=$(run_cmd fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d: -f2 | sed 's/,//g' | xargs)
+    if [[ -n "$jails_list" ]]; then
+        for jail in $jails_list; do
+            run_cmd fail2ban-client set "$jail" banip "$ip_to_ban" &>/dev/null || true
+        done
+        ok "IP $ip_to_ban забанен во всех активных защитах."
     else
-        err "Не удалось забанить IP $ip_to_ban."
+        err "Не удалось забанить IP, нет активных защит."
     fi
 }
 
@@ -618,17 +642,6 @@ _f2b_whitelist_menu() {
 }
 
 
-
-_f2b_notifications_menu() {
-    menu_header "🔔 Уведомления Telegram"
-    print_separator
-    info "Функционал уведомлений находится в стадии полной переработки."
-    printf_description "Будет представлен новый, централизованный модуль Telegram,"
-    printf_description "позволяющий гибко настраивать оповещения для всех компонентов системы."
-    print_separator
-}
-
-
 _f2b_extended_menu() {
     while true; do
         clear
@@ -715,7 +728,7 @@ _f2b_extended_menu() {
                 _f2b_jail_submenu "portscan-reshala" "syslog" "$f" "any" "ufw[name=portscan,port=any,protocol=tcp]" "Защита от сканирования портов на основе логов UFW."
                 ;;
             2) 
-                local f="[Definition]\nfailregex = ^ \[error\] \d+#\d+: \*\d+ user \"\S+\":? (password mismatch|was not found in).*, client: <HOST>, server: \S+, request: \"\S+ \S+ HTTP/\d+\.\d+\", host: \"\S+\"\nignoreregex ="
+                local f="[Definition]\nfailregex = ^.*\\[error\\] \\d+#\\d+: \\*\\d+ user \"\\S+\":? (password mismatch|was not found in).*, client: <HOST>, server: \\S+, request: \"\\S+ \\S+ HTTP/\\d+\\.\\d+\", host: \"\\S+\"\nignoreregex ="
                 _f2b_jail_submenu "nginx-auth-reshala" "nginx-error" "$f" "any" "ufw[name=nginx-auth,port=any,protocol=tcp]" "Защита от подбора паролей HTTP Basic Auth в Nginx."
                 ;;
             3) 
@@ -949,11 +962,6 @@ JAIL
     
     if _f2b_is_service_active; then
         ok "Fail2Ban успешно настроен и запущен!"
-        
-        # Apply Telegram settings if enabled
-        if [[ "$(get_config_var "F2B_NOTIFY_MODE")" == "instant" ]]; then
-            _f2b_apply_notification_settings "instant"
-        fi
     else
         err "Не удалось запустить Fail2Ban!"
         err "Проверьте: journalctl -xeu fail2ban --no-pager | tail -30"
@@ -1725,9 +1733,9 @@ _f2b_jail_submenu() {
                     _f2b_save_jail_option "$jail_name" "filter" "$jail_name"
                     if [[ "$current_log" == "systemd" ]]; then
                         _f2b_save_jail_option "$jail_name" "backend" "systemd"
-                        _f2b_save_jail_option "$jail_name" "logpath" ""
+                        _f2b_save_jail_option "$jail_name" "logpath" "/dev/null"
                     else
-                        _f2b_save_jail_option "$jail_name" "backend" ""
+                        _f2b_save_jail_option "$jail_name" "backend" "auto"
                         _f2b_save_jail_option "$jail_name" "logpath" "$current_log"
                     fi
                     _f2b_save_jail_option "$jail_name" "maxretry" "$current_maxretry"
@@ -1776,10 +1784,10 @@ _f2b_jail_submenu() {
                 if [[ -n "$F2B_SELECTED_LOG" ]]; then
                     if grep -q "^\s*\[$jail_name\]" /etc/fail2ban/jail.local 2>/dev/null; then
                         if [[ "$F2B_SELECTED_LOG" == "systemd" ]]; then
-                            _f2b_save_jail_option "$jail_name" "logpath" ""
+                            _f2b_save_jail_option "$jail_name" "logpath" "/dev/null"
                             _f2b_save_jail_option "$jail_name" "backend" "systemd"
                         else
-                            _f2b_save_jail_option "$jail_name" "backend" ""
+                            _f2b_save_jail_option "$jail_name" "backend" "auto"
                             _f2b_save_jail_option "$jail_name" "logpath" "$F2B_SELECTED_LOG"
                         fi
                         ok "Лог обновлен."

@@ -61,44 +61,38 @@ show_firewall_menu() {
         echo ""
 
         local choice
-        choice=$(safe_read "Выберите действие" "") || { break; }
+        choice=$(safe_read "Выберите действие" "") || { return 2; }
         
+        local ret=0
         case "$choice" in
             i|I)
                 if ! command -v ufw &> /dev/null; then
-                    _firewall_install_ufw
-                    wait_for_enter
+                    _firewall_install_ufw; ret=$?
                 fi
                 ;;
             1)
-                _firewall_show_rules
-                wait_for_enter
+                _firewall_show_rules; ret=$?
                 ;;
             2)
-                _firewall_reconfigure_wizard
-                wait_for_enter
+                _firewall_reconfigure_wizard; ret=$?
                 ;;
             3)
-                _firewall_add_rule
-                wait_for_enter
+                _firewall_add_rule; ret=$?
                 ;;
             4)
-                _firewall_delete_rule
-                wait_for_enter
+                _firewall_delete_rule; ret=$?
                 ;;
             5)
-                _firewall_antiddos_menu
+                _firewall_antiddos_menu; ret=$?
                 ;;
             6)
-                _firewall_logs_analytics
-                wait_for_enter
+                _firewall_logs_analytics; ret=$?
                 ;;
             s|S)
-                if ! command -v ufw &> /dev/null; then err "UFW не установлен."; else run_cmd systemctl status ufw; fi
-                wait_for_enter
+                if ! command -v ufw &> /dev/null; then err "UFW не установлен."; ret=1; else run_cmd systemctl status ufw; ret=$?; fi
                 ;;
             e|E)
-                if ! command -v ufw &>/dev/null; then err "UFW не установлен."
+                if ! command -v ufw &>/dev/null; then err "UFW не установлен."; ret=1
                 else
                     info "Включаю UFW..."
                     # Предупреждение если Docker запущен
@@ -112,27 +106,28 @@ show_firewall_menu() {
                             _firewall_fix_docker_ufw
                         fi
                     fi
-                    echo "y" | run_cmd ufw enable
+                    echo "y" | run_cmd ufw enable; ret=$?
                 fi
                 ;;
             d|D)
-                if ! command -v ufw &> /dev/null; then err "UFW не установлен."; elif ask_yes_no "Вы уверены, что хотите отключить firewall?"; then
+                if ! command -v ufw &> /dev/null; then err "UFW не установлен."; ret=1; elif ask_yes_no "Вы уверены, что хотите отключить firewall?"; then
                     warn "Отключаю UFW..."
-                    echo "y" | run_cmd ufw disable
+                    echo "y" | run_cmd ufw disable; ret=$?
+                else
+                    ret=2
                 fi
                 ;;
             r|R)
-                _firewall_reinstall
-                wait_for_enter
+                _firewall_reinstall; ret=$?
                 ;;
-
             b | B) 
-                break
+                return 2
                 ;;
             *)
-                warn "Неверный выбор"
+                warn "Неверный выбор"; ret=2
                 ;;
         esac
+        [[ $ret -ne 2 ]] && wait_for_enter
         disable_graceful_ctrlc
     done
 }
@@ -239,13 +234,13 @@ _firewall_reconfigure_wizard() {
     
     if ! ask_yes_no "Мастер сбросит все текущие правила и создаст новые. Продолжить?"; then
         info "Отмена."
-        return
+        return 2
     fi
 
     echo ""
     info "Шаг 1: Роль сервера"
     local role_choice
-    role_choice=$(ask_selection "" "Это главный сервер (Панель управления)" "Это управляемый узел (Нода Skynet)") || return
+    role_choice=$(ask_selection "" "Это главный сервер (Панель управления)" "Это управляемый узел (Нода Skynet)") || return 2
 
     echo ""
     info "Шаг 2: Настройка доступа"
@@ -253,21 +248,21 @@ _firewall_reconfigure_wizard() {
     local ssh_port
     ssh_port=$(get_config_var "SSH_PORT")
     ssh_port=${ssh_port:-22}
-    ssh_port=$(safe_read "SSH порт" "$ssh_port") || return
+    ssh_port=$(safe_read "SSH порт" "$ssh_port") || return 2
 
     local admin_ip
-    admin_ip=$(safe_read "IP администратора (оставьте пустым для доступа отовсюду)" "") || return
+    admin_ip=$(safe_read "IP администратора (оставьте пустым для доступа отовсюду)" "") || return 2
     if [[ -n "$admin_ip" ]] && ! validate_ip "$admin_ip"; then
         err "Некорректный IP администратора."
-        return
+        return 1
     fi
 
     local panel_ip=""
     if [[ "$role_choice" == "2" ]]; then # Если это Нода
-        panel_ip=$(ask_non_empty "IP адрес Панели управления (для полного доступа)") || return
+        panel_ip=$(ask_non_empty "IP адрес Панели управления (для полного доступа)") || return 2
         if ! validate_ip "$panel_ip"; then
             err "Некорректный IP панели."
-            return
+            return 1
         fi
     fi
     
@@ -339,22 +334,22 @@ _firewall_add_rule() {
     echo ""
     
     local choice
-    choice=$(safe_read "Выберите тип правила" "") || return
+    choice=$(safe_read "Выберите тип правила" "") || return 2
 
     case "$choice" in
         1)
             local port
-            port=$(ask_non_empty "Какой порт открыть?") || return
+            port=$(ask_non_empty "Какой порт открыть?") || return 2
             if ! validate_port "$port"; then
                 err "Некорректный номер порта."
-                return
+                return 1
             fi
 
             local ip
-            ip=$(safe_read "Разрешить только для одного IP? (оставьте пустым для всех)" "") || return
+            ip=$(safe_read "Разрешить только для одного IP? (оставьте пустым для всех)" "") || return 2
             if [[ -n "$ip" ]] && ! validate_ip "$ip"; then
                 err "Некорректный IP адрес."
-                return
+                return 1
             fi
 
             if [[ -n "$ip" ]]; then
@@ -367,6 +362,8 @@ _firewall_add_rule() {
                         fi
                     fi
                     ok "Правило добавлено (включая Docker Route)."
+                else
+                    return 2
                 fi
             else
                 if ask_yes_no "Открыть порт ${port} для всех?"; then
@@ -378,15 +375,17 @@ _firewall_add_rule() {
                         fi
                     fi
                     ok "Правило добавлено (включая Docker Route)."
+                else
+                    return 2
                 fi
             fi
             ;;
         2)
             local ip
-            ip=$(ask_non_empty "Какой IP добавить в whitelist?") || return
+            ip=$(ask_non_empty "Какой IP добавить в whitelist?") || return 2
             if ! validate_ip "$ip"; then
                 err "Некорректный IP адрес."
-                return
+                return 1
             fi
 
             if ask_yes_no "Дать полный доступ IP ${ip} к серверу и Docker-контейнерам?"; then
@@ -410,13 +409,16 @@ _firewall_add_rule() {
                 fi
                 
                 ok "IP ${ip} добавлен в whitelist Firewall."
+            else
+                return 2
             fi
             ;;
         b|B)
-            return
+            return 2
             ;;
         *)
             warn "Неверный выбор"
+            return 2
             ;;
     esac
 }
@@ -433,29 +435,31 @@ _firewall_delete_rule() {
 
     if ! run_cmd ufw status numbered | grep -q "\["; then
         warn "Нет правил для удаления."
-        return
+        return 1
     fi
     
     run_cmd ufw status numbered
     echo ""
 
     local rule_num
-    rule_num=$(ask_non_empty "Введите номер правила для удаления") || return
+    rule_num=$(ask_non_empty "Введите номер правила для удаления") || return 2
 
     if ! [[ "$rule_num" =~ ^[0-9]+$ ]]; then
         err "Нужно ввести число."
-        return
+        return 1
     fi
 
     # Check if rule exists
     if ! run_cmd ufw status numbered | grep -q "\[\s*${rule_num}\s*\]"; then
         err "Правила с номером ${rule_num} не существует."
-        return
+        return 1
     fi
 
     if ask_yes_no "Вы уверены, что хотите удалить правило номер ${rule_num}?"; then
         echo "y" | run_cmd ufw delete "$rule_num"
         ok "Правило ${rule_num} удалено."
+    else
+        return 2
     fi
 }
 
@@ -496,29 +500,34 @@ _firewall_antiddos_menu() {
         echo ""
 
         local choice
-        choice=$(safe_read "Выберите действие" "") || { break; }
+        choice=$(safe_read "Выберите действие" "") || { return 2; }
 
+        local ret=0
         case "$choice" in
-            1) _antiddos_setup_limits; wait_for_enter;;
+            1) _antiddos_setup_limits; ret=$?;;
             2)
                 if ask_yes_no "Удалить все Anti-DDoS лимиты?"; then
                     _antiddos_remove_block
                     run_cmd ufw reload 2>/dev/null || true
                     ok "Anti-DDoS лимиты удалены."
+                    ret=0
+                else
+                    ret=2
                 fi
-                wait_for_enter
                 ;;
             3)
                 if [[ -f "$before_rules" ]]; then
                     sed -n "/${ANTIDDOS_MARKER_START}/,/${ANTIDDOS_MARKER_END}/p" "$before_rules"
+                    ret=0
                 else
                     warn "Файл before.rules не найден."
+                    ret=1
                 fi
-                wait_for_enter
                 ;;
-            b|B) break;;
-            *) warn "Неверный выбор";;
+            b|B) return 2;;
+            *) warn "Неверный выбор"; ret=2;;
         esac
+        [[ $ret -ne 2 ]] && wait_for_enter
         disable_graceful_ctrlc
     done
 }
@@ -529,8 +538,8 @@ _antiddos_setup_limits() {
     print_separator
 
     local conn_limit rate_limit
-    conn_limit=$(ask_number_in_range "Лимит подключений (CONN, рекомендуется 50-150)" 10 1000 "100") || return
-    rate_limit=$(ask_number_in_range "Лимит пакетов/сек (RATE, рекомендуется 25-100)" 5 500 "50") || return
+    conn_limit=$(ask_number_in_range "Лимит подключений (CONN, рекомендуется 50-150)" 10 1000 "100") || return 2
+    rate_limit=$(ask_number_in_range "Лимит пакетов/сек (RATE, рекомендуется 25-100)" 5 500 "50") || return 2
 
     info "Применяю: CONN=${conn_limit}, RATE=${rate_limit}/sec..."
 
@@ -721,13 +730,16 @@ _firewall_logs_analytics() {
 
     if ! command -v ufw &>/dev/null; then
         err "UFW не установлен."
-        return
+        return 1
     fi
+
+    # Автоматически гарантируем включение логов на низком уровне
+    run_cmd ufw logging low >/dev/null 2>&1 || true
 
     local log_file; log_file=$(find_log_file "ufw")
     if [[ ! -f "$log_file" ]]; then
         warn "Файлы логов UFW не найдены."
-        return
+        return 1
     fi
 
     # ТОП-10 атакующих IP
@@ -784,6 +796,12 @@ _firewall_install_ufw() {
         run_cmd ufw allow 443/tcp
         run_cmd ufw default deny incoming
         run_cmd ufw default allow outgoing
+        run_cmd ufw logging low >/dev/null 2>&1 || true
+        
+        # Отключаем IPv6, так как на некоторых серверах ip6tables сломан и крашит UFW
+        if [[ -f "/etc/default/ufw" ]] && grep -q "^IPV6=yes" "/etc/default/ufw"; then
+            run_cmd sed -i 's/^IPV6=yes/IPV6=no/' "/etc/default/ufw"
+        fi
         
         if ask_yes_no "Включить Firewall сейчас?"; then
             # Проверка Docker при первом включении
@@ -796,9 +814,12 @@ _firewall_install_ufw() {
                 fi
             fi
             echo "y" | run_cmd ufw enable
+        else
+            return 2
         fi
     else
         err "Не удалось установить UFW. Проверьте интернет-соединение или репозитории."
+        return 1
     fi
 }
 
@@ -809,7 +830,7 @@ _firewall_reinstall() {
     echo -e "  ${C_RED}ВНИМАНИЕ! Это удалит текущие конфигурации и сбросит все порты.${C_RESET}"
     echo -e "  ${C_RED}Все ваши пользовательские правила будут безвозвратно удалены!${C_RESET}"
     if ! ask_yes_no "Продолжить полную очистку и переустановку?"; then
-        return
+        return 2
     fi
     info "Сбрасываем UFW..."
     echo "y" | run_cmd ufw --force reset 2>/dev/null || true

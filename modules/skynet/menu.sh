@@ -25,7 +25,6 @@
 # @item( skynet_server_security | 2 | 🔢 Сменить порт SSH | _sss_change_port | 30 | 2 | Меняет порт SSH с автоматическим обновлением Firewall и Fail2Ban. )
 # @item( skynet_server_security | 3 | 🔥 Настроить Firewall | _sss_setup_ufw | 40 | 3 | Установка UFW и синхронизация с Глобальным Белым Списком. )
 # @item( skynet_server_security | 4 | 🔨 Настроить Fail2Ban | _sss_setup_f2b | 50 | 3 | Установка Fail2Ban и добавление Белого Списка в ignoreip. )
-# @item( skynet_server_security | 5 | 🔔 Уведомления | _sss_setup_login_notify | 60 | 4 | Настройка уведомлений в Telegram о входах на сервер. )
 # @item( skynet_server_security | r | 🔄 Сброс (Rollback) | _sss_rollback_security | 90 | 5 | Возвращает доступ по паролю и дефолтные настройки. )
 #
 
@@ -546,10 +545,6 @@ _show_server_security_menu() {
         local env; env=$(_sss_get_gwl_env)
         _skynet_run_plugin_on_server_with_env "plugins/skynet_commands/security/04_setup_fail2ban.sh" "$env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
     }
-    _sss_setup_login_notify() {
-        local env; env=$(_sss_get_gwl_env)
-        _skynet_run_plugin_on_server_with_env "plugins/skynet_commands/security/06_setup_ssh_login_notify.sh" "$env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
-    }
     _sss_rollback_security() {
         warn "☢️  ВНИМАНИЕ! Это действие ослабит защиту сервера!"
         printf_info "Будет включен вход по паролю и разрешен вход root."
@@ -578,10 +573,10 @@ _show_server_security_menu() {
         print_separator "-"
 
         local choice
-        choice=$(safe_read "Твой выбор, босс") || break
+        choice=$(safe_read "Твой выбор, босс") || { return 2; }
 
         if [[ "$choice" == "b" || "$choice" == "B" ]]; then
-            break
+            return 2
         fi
 
         local action
@@ -594,7 +589,8 @@ _show_server_security_menu() {
             
             # Выполняем локальную функцию, которая уже знает о сервере
             "$func_name"
-            wait_for_enter
+            local ret=$?
+            [[ $ret -ne 2 ]] && wait_for_enter
         else
             warn "Неверный выбор"
         fi

@@ -39,14 +39,16 @@ show_ssh_ports_menu() {
         echo ""
 
         local choice
-        choice=$(safe_read "Выберите действие" "") || { break; }
+        choice=$(safe_read "Выберите действие" "") || { return 2; }
 
+        local ret=0
         case "$choice" in
-            1) _ssh_add_port; wait_for_enter;;
-            2) _ssh_remove_port; wait_for_enter;;
-            b|B) break;;
-            *) warn "Неверный выбор";;
+            1) _ssh_add_port; ret=$?;;
+            2) _ssh_remove_port; ret=$?;;
+            b|B) return 2;;
+            *) warn "Неверный выбор"; ret=2;;
         esac
+        [[ $ret -ne 2 ]] && wait_for_enter
         disable_graceful_ctrlc
     done
 }
@@ -87,30 +89,30 @@ _ssh_add_port() {
     print_separator
 
     local new_port
-    new_port=$(ask_non_empty "Введите новый SSH порт") || return
+    new_port=$(ask_non_empty "Введите новый SSH порт") || return 2
 
     if ! validate_port "$new_port"; then
         err "Некорректный номер порта."
-        return
+        return 1
     fi
 
     # Проверяем, не используется ли порт уже
     if grep -qE "^\s*Port\s+${new_port}\b" /etc/ssh/sshd_config 2>/dev/null; then
         warn "Порт ${new_port} уже настроен в SSH."
-        return
+        return 1
     fi
 
     # Проверяем, свободен ли порт
     if ss -tlnp | grep -q ":${new_port} " 2>/dev/null; then
         warn "Порт ${new_port} уже занят другим сервисом!"
         if ! ask_yes_no "Всё равно добавить?" "n"; then
-            return
+            return 2
         fi
     fi
 
     if ! ask_yes_no "Добавить SSH порт ${new_port}? (Firewall будет обновлен автоматически)"; then
         info "Отмена."
-        return
+        return 2
     fi
 
     # --- Бэкап ---
@@ -167,7 +169,7 @@ _ssh_remove_port() {
 
     if [[ ${#ports[@]} -le 1 ]]; then
         err "Нельзя удалить единственный SSH порт! Сначала добавьте другой."
-        return
+        return 1
     fi
 
     info "Текущие SSH порты:"
@@ -178,18 +180,25 @@ _ssh_remove_port() {
     done
 
     local del_port
-    del_port=$(ask_non_empty "Введите порт для удаления") || return
+    del_port=$(ask_non_empty "Введите порт для удаления") || return 2
+
+    # Проверяем, является ли ввод числовым индексом списка портов
+    if [[ "$del_port" =~ ^[0-9]+$ ]] && [[ "$del_port" -ge 1 ]] && [[ "$del_port" -le "${#ports[@]}" ]]; then
+        local index=$((del_port - 1))
+        del_port="${ports[$index]}"
+        info "Выбран порт: ${del_port}"
+    fi
 
     # Проверяем, что порт есть в конфиге
     if ! printf '%s\n' "${ports[@]}" | grep -qx "$del_port"; then
         err "Порт ${del_port} не найден в конфиге SSH."
-        return
+        return 1
     fi
 
     # Проверяем, что это не единственный порт
     if [[ ${#ports[@]} -le 1 ]]; then
         err "Нельзя удалить последний SSH порт!"
-        return
+        return 1
     fi
 
     # Предупреждаем если удаляем стандартный порт 22
@@ -199,7 +208,7 @@ _ssh_remove_port() {
 
     if ! ask_yes_no "Удалить SSH порт ${del_port}?"; then
         info "Отмена."
-        return
+        return 2
     fi
 
     # --- Бэкап ---

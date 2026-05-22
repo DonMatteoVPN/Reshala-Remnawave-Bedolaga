@@ -477,7 +477,7 @@ find_log_file() {
             if run_cmd test -f "/var/log/ufw.log" 2>/dev/null; then echo "/var/log/ufw.log"
             elif run_cmd test -f "/var/log/kern.log" 2>/dev/null; then echo "/var/log/kern.log"
             elif run_cmd test -f "/var/log/syslog" 2>/dev/null; then echo "/var/log/syslog"
-            else run_cmd journalctl -t ufw | tail -n 100 > /tmp/reshala_ufw.log; echo "/tmp/reshala_ufw.log"
+            else run_cmd sh -c "journalctl -k --no-pager | grep '\[UFW BLOCK\]' | tail -n 1000 > /tmp/reshala_ufw.log" 2>/dev/null; echo "/tmp/reshala_ufw.log"
             fi
             ;;
         auth)
