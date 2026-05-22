@@ -760,10 +760,19 @@ volumes = svc.get("volumes") or []
 if not isinstance(volumes, list):
     volumes = []
 
+def get_cont_path(val):
+    if isinstance(val, dict): return val.get("target", "")
+    parts = str(val).strip().split(":")
+    if not parts: return ""
+    if len(parts) == 1: return parts[0]
+    last = parts[-1].strip()
+    if last in ("ro", "rw", "z", "Z", "delegated", "cached", "consistent"):
+        return parts[-2].strip() if len(parts) >= 2 else ""
+    return last
+
 # Проверяем: не добавлен ли уже этот volume?
 for v in volumes:
-    v_str = str(v) if not isinstance(v, dict) else f"{v.get('source','')}:{v.get('target','')}'"
-    if container_path in v_str:
+    if get_cont_path(v) == container_path:
         print("ALREADY_EXISTS")
         sys.exit(0)
 
@@ -1206,8 +1215,19 @@ if target_svc is None:
 svc = services[target_svc]
 vols = svc.get("volumes") or []
 if not isinstance(vols, list): vols = []
+
+def get_cont_path(val):
+    if isinstance(val, dict): return val.get("target", "")
+    parts = str(val).strip().split(":")
+    if not parts: return ""
+    if len(parts) == 1: return parts[0]
+    last = parts[-1].strip()
+    if last in ("ro", "rw", "z", "Z", "delegated", "cached", "consistent"):
+        return parts[-2].strip() if len(parts) >= 2 else ""
+    return last
+
 for v in vols:
-    if container_path in str(v):
+    if get_cont_path(v) == container_path:
         print("ALREADY_EXISTS"); sys.exit(0)
 vols.append(new_volume)
 svc["volumes"] = vols; services[target_svc] = svc; data["services"] = services
@@ -1252,8 +1272,19 @@ if target_svc is None:
     print("SKIP"); sys.exit(0)
 svc = services[target_svc]
 vols = svc.get("volumes") or []
+
+def get_cont_path(val):
+    if isinstance(val, dict): return val.get("target", "")
+    parts = str(val).strip().split(":")
+    if not parts: return ""
+    if len(parts) == 1: return parts[0]
+    last = parts[-1].strip()
+    if last in ("ro", "rw", "z", "Z", "delegated", "cached", "consistent"):
+        return parts[-2].strip() if len(parts) >= 2 else ""
+    return last
+
 for v in vols:
-    if container_path in str(v):
+    if get_cont_path(v) == container_path:
         print("ALREADY_EXISTS"); sys.exit(0)
 vols.append(new_volume)
 svc["volumes"] = vols; services[target_svc] = svc; data["services"] = services
@@ -1272,7 +1303,10 @@ PY
         warn "Не удалось добавить volume в ${compose_file}: ${cert_result}"
         return 1
     fi
-    [[ "$acme_result" == ADDED:* ]] && ok "Volume acme-challenge добавлен."
+    if [[ "$acme_result" == ADDED:* ]]; then
+        ok "Volume acme-challenge добавлен."
+        need_restart=1
+    fi
 
     if [[ "$need_restart" -eq 1 ]]; then
         info "Перезапускаю контейнер ${cname} чтобы применить новые volumes..."
