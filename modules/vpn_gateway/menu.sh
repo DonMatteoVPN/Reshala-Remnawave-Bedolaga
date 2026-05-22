@@ -916,6 +916,16 @@ _vgw_detect_show_plan() {
     local ntype="$1" cname="${2:-}" cpath="${3:-}" csrc="${4:-none}" domain="$5" gport="$6"
     local W="$C_YELLOW" C="$C_CYAN" G="$C_GREEN" R="$C_RED" B="$C_BOLD" E="$C_RESET"
 
+    # Разрешаем реальные SSL-пути для корректного отображения и планирования
+    local CERT KEY VOLUME_NEEDED VOLUME_HOST VOLUME_CONT CSRC_EFFECTIVE
+    CERT="" KEY="" VOLUME_NEEDED="0" VOLUME_HOST="" VOLUME_CONT="" CSRC_EFFECTIVE=""
+    if [[ -n "$cname" ]]; then
+        _vgw_resolve_ssl_paths "$cname" "$csrc" "$domain" >/dev/null 2>&1
+    else
+        CSRC_EFFECTIVE=$(echo "$csrc" | cut -d: -f1)
+        [[ -z "$CSRC_EFFECTIVE" ]] && CSRC_EFFECTIVE="none"
+    fi
+
     echo ""
     echo -e "  ${C}╔══════════════════════════════════════════════════════════════╗${E}"
     echo -e "  ${C}║${E}  🔍  ${B}Обнаружено окружение${E}                                    ${C}║${E}"
@@ -952,11 +962,15 @@ _vgw_detect_show_plan() {
             ;;
     esac
 
-    echo -e "  ${C}║${E}  SSL:        ${G}${csrc%%:*}${E}"
+    if [[ "$csrc" == "certwarden"* && "$CSRC_EFFECTIVE" == "reshala" ]]; then
+        echo -e "  ${C}║${E}  SSL:        ${G}certwarden -> Let's Encrypt (reshala)${E} ${W}(не совпадает домен!)${E}"
+    else
+        echo -e "  ${C}║${E}  SSL:        ${G}${CSRC_EFFECTIVE}${E}"
+    fi
+
     echo -e "  ${C}╠══════════════════════════════════════════════════════════════╣${E}"
     echo -e "  ${C}║${E}  📋  ${B}План действий:${E}"
 
-    local csrc_type_show; csrc_type_show=$(echo "$csrc" | cut -d: -f1)
     case "$ntype" in
         free)
             echo -e "  ${C}║${E}  1. Запустить edge-nginx контейнер на 80/443"
@@ -969,14 +983,14 @@ _vgw_detect_show_plan() {
             echo -e "  ${C}║${E}  3. Gateway запустится на порту ${G}${gport}${E}"
             ;;
         docker:conf.d:*)
-            if [[ "$csrc_type_show" == "certwarden" || "$csrc_type_show" == "letsencrypt" ]]; then
-                echo -e "  ${C}║${E}  1. ${G}Сертификаты уже смонтированы (${csrc_type_show})${E}"
+            if [[ "$VOLUME_NEEDED" == "0" && ( "$CSRC_EFFECTIVE" == "certwarden" || "$CSRC_EFFECTIVE" == "letsencrypt" ) ]]; then
+                echo -e "  ${C}║${E}  1. ${G}Сертификаты уже смонтированы (${CSRC_EFFECTIVE})${E}"
                 echo -e "  ${C}║${E}  2. Создать ${G}${cpath}/80-bedolaga.conf${E}"
                 echo -e "  ${C}║${E}  3. docker exec ${cname} nginx -t && nginx -s reload"
             else
                 echo -e "  ${C}║${E}  1. Найти docker-compose.yml контейнера ${G}${cname}${E}"
                 echo -e "  ${C}║${E}  2. ${G}Автоматически добавить volume сертификатов${E}"
-                echo -e "  ${C}║${E}     ${G}$(_vgw_certs_dir):/etc/nginx/certs:ro${E}"
+                echo -e "     ${G}${VOLUME_HOST:-$(_vgw_certs_dir)}:${VOLUME_CONT:-/etc/nginx/certs}:ro${E}"
                 echo -e "  ${C}║${E}  3. Перезапустить контейнер ${G}${cname}${E}"
                 echo -e "  ${C}║${E}  4. Создать ${G}${cpath}/80-bedolaga.conf${E}"
                 echo -e "  ${C}║${E}  5. docker exec ${cname} nginx -t && nginx -s reload"
@@ -997,31 +1011,71 @@ _vgw_detect_show_plan() {
 # ══════════════════════════════════════════════════════════════════
 # Разрешает реальные пути к SSL-сертификатам внутри контейнера
 # с учётом csrc (certwarden / letsencrypt / reshala / none)
-# Устанавливает переменные CERT и KEY (пути внутри nginx)
+# и public_domain (домен лендинга).
+#
+# Аргументы:
+#   $1 cname         — имя nginx-контейнера
+#   $2 csrc          — строка certwarden:HOST:CONTAINER_PATH / ...
+#   $3 public_domain — домен лендинга (lendinghello.mooo.com)
+#
+# Устанавливает переменные:
+#   CERT, KEY            — пути к сертификату внутри nginx (или на хосте)
+#   VOLUME_NEEDED        — "1" если нужно добавить volume сертификатов
+#   VOLUME_HOST          — хост-путь к папке с сертификатами
+#   VOLUME_CONT          — путь внутри контейнера
+#   CSRC_EFFECTIVE       — итоговый тип используемого источника
 # ══════════════════════════════════════════════════════════════════
 _vgw_resolve_ssl_paths() {
-    local cname="$1" csrc="$2"
+    local cname="$1" csrc="$2" public_domain="${3:-}"
     local csrc_type csrc_host csrc_cont
     csrc_type=$(echo "$csrc" | cut -d: -f1)
     csrc_host=$(echo  "$csrc" | cut -d: -f2)
     csrc_cont=$(echo  "$csrc" | cut -d: -f3)
 
+    # Для облегчения диагностики — экспортируем итоговый тип
+    CSRC_EFFECTIVE="$csrc_type"
+
     case "$csrc_type" in
         certwarden)
-            # Уже смонтирован certwarden — используем путь внутри контейнера
-            CERT="${csrc_cont}/fullchain.pem"
-            KEY="${csrc_cont}/privkey.pem"
-            VOLUME_NEEDED="0"    # volume уже есть
+            # ── Ключевая проверка: certwarden для НАШЕГО домена или чужого? ──
+            # csrc_cont содержит путь внутри контейнера, например:
+            #   /etc/nginx/ssl/donmatteo.monster   → домен: donmatteo.monster
+            #   /etc/nginx/ssl/lendinghello.mooo.com → домен: lendinghello.mooo.com
+            local cw_domain
+            cw_domain=$(basename "$csrc_cont")
+
+            if [[ -n "$public_domain" && "$cw_domain" == "$public_domain" ]]; then
+                # ✅ certwarden обслуживает именно наш домен — используем напрямую
+                CERT="${csrc_cont}/fullchain.pem"
+                KEY="${csrc_cont}/privkey.pem"
+                VOLUME_NEEDED="0"
+                CSRC_EFFECTIVE="certwarden"
+            else
+                # ❌ certwarden для ДРУГОГО домена (donmatteo.monster ≠ lendinghello.mooo.com)
+                # → Используем наши reshala/acme сертификаты для public_domain
+                warn "certwarden смонтирован для домена '${cw_domain}',"
+                warn "  а домен лендинга '${public_domain:-?}' — это другой домен."
+                warn "  Переключаюсь на наши reshala-сертификаты (Let's Encrypt / ACME)."
+                CERT="/etc/nginx/certs/fullchain.pem"
+                KEY="/etc/nginx/certs/privkey.pem"
+                VOLUME_NEEDED="1"
+                VOLUME_HOST="$(_vgw_certs_dir)"
+                VOLUME_CONT="/etc/nginx/certs"
+                CSRC_EFFECTIVE="reshala"
+                # Проверяем что наши сертификаты уже существуют
+                _vgw_check_our_certs_exist "$public_domain"
+            fi
             ;;
         letsencrypt)
-            # LE смонтирован в контейнер — используем наши cert-ы (reshala путь)
-            # т.к. LE live/<domain>/... требует знать имя домена,
-            # проще смонтировать наши reshala-сертификаты отдельно
+            # LE смонтирован в контейнер — используем наши reshala-сертификаты
+            # т.к. LE live/<domain>/... требует знать точное имя домена внутри контейнера
             CERT="/etc/nginx/certs/fullchain.pem"
             KEY="/etc/nginx/certs/privkey.pem"
             VOLUME_NEEDED="1"
             VOLUME_HOST="$(_vgw_certs_dir)"
             VOLUME_CONT="/etc/nginx/certs"
+            CSRC_EFFECTIVE="reshala"
+            _vgw_check_our_certs_exist "$public_domain"
             ;;
         reshala)
             CERT="/etc/nginx/certs/fullchain.pem"
@@ -1029,6 +1083,8 @@ _vgw_resolve_ssl_paths() {
             VOLUME_NEEDED="1"
             VOLUME_HOST="$(_vgw_certs_dir)"
             VOLUME_CONT="/etc/nginx/certs"
+            CSRC_EFFECTIVE="reshala"
+            _vgw_check_our_certs_exist "$public_domain"
             ;;
         none|*)
             CERT="/etc/nginx/certs/fullchain.pem"
@@ -1036,8 +1092,40 @@ _vgw_resolve_ssl_paths() {
             VOLUME_NEEDED="1"
             VOLUME_HOST="$(_vgw_certs_dir)"
             VOLUME_CONT="/etc/nginx/certs"
+            CSRC_EFFECTIVE="acme"
+            _vgw_check_our_certs_exist "$public_domain"
             ;;
     esac
+}
+
+# ── Проверяет что наши edge/certs/ содержат сертификат для public_domain
+# Предупреждает если файл не найден (acme ещё не выпустил / DNS не настроен)
+_vgw_check_our_certs_exist() {
+    local domain="${1:-}"
+    local certs_dir; certs_dir="$(_vgw_certs_dir)"
+    local cert_file="${certs_dir}/fullchain.pem"
+
+    if [[ ! -f "$cert_file" ]]; then
+        warn "  ⚠️  Сертификат для '${domain}' НЕ НАЙДЕН в ${certs_dir}/"
+        warn "  Убедитесь что:"
+        warn "    1. DNS A-запись для ${domain} указывает на этот server"
+        warn "    2. Порты 80/443 (или настроенные) открыты"
+        warn "    3. Запустите вручную: ./scripts/ensure-certs.sh"
+        warn "  Nginx конфиг будет создан, но SSL может не работать до выпуска сертификата."
+    else
+        # Проверяем что сертификат именно для нашего домена (через openssl если есть)
+        if command -v openssl &>/dev/null && [[ -n "$domain" ]]; then
+            local cert_cn
+            cert_cn=$(openssl x509 -noout -subject -in "$cert_file" 2>/dev/null | grep -oP 'CN\s*=\s*\K[^,/]+' | head -1 || echo "")
+            local cert_san
+            cert_san=$(openssl x509 -noout -text -in "$cert_file" 2>/dev/null | grep -A1 'Subject Alternative Name' | grep 'DNS:' | grep -oP 'DNS:[^,]+' | tr '\n' ' ' || echo "")
+            if [[ -n "$cert_cn" && "$cert_cn" != *"$domain"* && "$cert_san" != *"$domain"* ]]; then
+                warn "  ⚠️  Сертификат в ${certs_dir}/ выдан для '${cert_cn}',"
+                warn "       а не для '${domain}'!"
+                warn "  Запустите: ./scripts/ensure-certs.sh  (чтобы выпустить для ${domain})"
+            fi
+        fi
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -1228,10 +1316,10 @@ _vgw_nginx_inject_auto() {
     fi
 
     # ── Определяем пути к сертификатам ──────────────────────────
-    local CERT KEY VOLUME_NEEDED VOLUME_HOST VOLUME_CONT
-    VOLUME_NEEDED="0" VOLUME_HOST="" VOLUME_CONT=""
+    local CERT KEY VOLUME_NEEDED VOLUME_HOST VOLUME_CONT CSRC_EFFECTIVE
+    VOLUME_NEEDED="0" VOLUME_HOST="" VOLUME_CONT="" CSRC_EFFECTIVE=""
     if [[ -n "$cname" ]]; then
-        _vgw_resolve_ssl_paths "$cname" "$csrc"
+        _vgw_resolve_ssl_paths "$cname" "$csrc" "$domain"
     else
         CERT="$(_vgw_certs_dir)/fullchain.pem"
         KEY="$(_vgw_certs_dir)/privkey.pem"
@@ -1337,21 +1425,31 @@ _vgw_nginx_manual_guide() {
     fi
     [[ -z "$csrc_host" ]] && csrc_host="$(_vgw_certs_dir)"
 
-    local docker_mount_notice="1"
-    if [[ "$csrc_type" == "certwarden" || "$csrc_type" == "letsencrypt" ]]; then
-        docker_mount_notice="0"
-    fi
-
+    local CERT KEY VOLUME_NEEDED VOLUME_HOST VOLUME_CONT CSRC_EFFECTIVE
+    VOLUME_NEEDED="0" VOLUME_HOST="" VOLUME_CONT="" CSRC_EFFECTIVE=""
     local cert="" key=""
+
     if [[ -n "$cname" ]]; then
         # Используем умное определение путей на основе csrc
-        local CERT KEY VOLUME_NEEDED VOLUME_HOST VOLUME_CONT
-        VOLUME_NEEDED="0"
-        _vgw_resolve_ssl_paths "$cname" "$csrc"
-        cert="$CERT"; key="$KEY"
+        _vgw_resolve_ssl_paths "$cname" "$csrc" "$domain"
+        cert="$CERT"
+        key="$KEY"
     else
-        cert="$(_vgw_certs_dir)/fullchain.pem"
-        key="$(_vgw_certs_dir)/privkey.pem"
+        CERT="$(_vgw_certs_dir)/fullchain.pem"
+        KEY="$(_vgw_certs_dir)/privkey.pem"
+        cert="$CERT"
+        key="$KEY"
+        VOLUME_NEEDED="0"
+        VOLUME_HOST="$(_vgw_certs_dir)"
+        VOLUME_CONT="/etc/nginx/certs"
+        CSRC_EFFECTIVE="reshala"
+        _vgw_check_our_certs_exist "$domain"
+    fi
+
+    # Настраиваем docker_mount_notice на основе VOLUME_NEEDED
+    local docker_mount_notice="0"
+    if [[ "$VOLUME_NEEDED" == "1" ]]; then
+        docker_mount_notice="1"
     fi
 
     local conf_content
@@ -1501,7 +1599,7 @@ EOF
             echo -e "  ${G}${B}👉 ИСПОЛЬЗОВАНИЕ АВТО-СЕРТИФИКАТОВ BEDOLAGA / RESHALA${E}"
             echo -e "     Для этого ${B}ОБЯЗАТЕЛЬНО${E} добавьте в секцию ${B}volumes:${E} вашего Nginx"
             echo -e "     в файле ${B}docker-compose.yml${E} (или аналогичном) следующие строки:"
-            echo -e "  ${G}       - ${csrc_host}:/etc/nginx/certs:ro${E}"
+            echo -e "  ${G}       - ${VOLUME_HOST:-$csrc_host}:/etc/nginx/certs:ro${E}"
             echo -e "  ${G}       - $(_vgw_project_dir)/edge/acme-challenge:/var/www/acme-challenge:ro${E}"
             echo ""
             echo -e "     После добавления volumes перезапустите контейнер Nginx:"
@@ -1509,9 +1607,9 @@ EOF
             echo ""
             echo -e "     (Конфиг Nginx ниже уже преднастроен на пути ${G}/etc/nginx/certs/...${E})"
         else
-            echo -e "  ${G}${B}👉 ИСПОЛЬЗОВАНИЕ СУЩЕСТВУЮЩИХ СЕРТИФИКАТОВ (${csrc_type})${E}"
+            echo -e "  ${G}${B}👉 ИСПОЛЬЗОВАНИЕ СУЩЕСТВУЮЩИХ СЕРТИФИКАТОВ (${CSRC_EFFECTIVE})${E}"
             echo -e "     Мы обнаружили, что ваш Nginx уже примонтирован к папке с сертификатами"
-            echo -e "     на хосте: ${C}${csrc_host}${E} (внутри контейнера: ${C}${csrc_container}${E})."
+            echo -e "     на хосте: ${C}${VOLUME_HOST:-$csrc_host}${E} (внутри контейнера: ${C}${VOLUME_CONT:-$csrc_container}${E})."
             echo ""
             echo -e "     Поскольку папка ${B}УЖЕ примонтирована${E}, вносить изменения"
             echo -e "     в ${B}docker-compose.yml${E} для Nginx ${G}НЕ ТРЕБУЕТСЯ!${E} Всё уже готово."
@@ -1528,10 +1626,10 @@ EOF
         fi
         echo "  ────────────────────────────────────────────────────"
         echo ""
-    elif [[ "$csrc_type" == "reshala" && -z "$cname" ]]; then
+    elif [[ "$CSRC_EFFECTIVE" == "reshala" && -z "$cname" ]]; then
         echo -e "  ${G}${B}🔑 ОБНАРУЖЕНЫ СЕРТИФИКАТЫ!${E}"
         echo -e "  На сервере найдены рабочие SSL-сертификаты в:"
-        echo -e "  ${C}${csrc_host}${E}"
+        echo -e "  ${C}${VOLUME_HOST:-$csrc_host}${E}"
         echo ""
         echo -e "  Конфиг ниже уже настроен на их использование напрямую!"
         echo "  ────────────────────────────────────────────────────"
