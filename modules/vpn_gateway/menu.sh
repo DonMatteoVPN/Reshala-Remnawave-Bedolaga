@@ -1127,6 +1127,27 @@ _vgw_check_our_certs_exist() {
     local domain="${1:-}"
     local certs_dir; certs_dir="$(_vgw_certs_dir)"
     local cert_file="${certs_dir}/fullchain.pem"
+    local key_file="${certs_dir}/privkey.pem"
+
+    # Если Docker ошибочно создал директорию вместо файла, удаляем её
+    if [[ -d "$cert_file" ]]; then rm -rf "$cert_file"; fi
+    if [[ -d "$key_file" ]]; then rm -rf "$key_file"; fi
+
+    if [[ ! -f "$cert_file" || ! -s "$cert_file" || ! -f "$key_file" || ! -s "$key_file" ]]; then
+        info "Создаю временный самоподписанный SSL-сертификат для '${domain}'..."
+        mkdir -p "${certs_dir}"
+        chmod 755 "${certs_dir}" 2>/dev/null || true
+        if command -v openssl &>/dev/null; then
+            rm -f "${key_file}" "${cert_file}" 2>/dev/null || true
+            openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
+              -keyout "${key_file}" \
+              -out "${cert_file}" \
+              -subj "/CN=${domain:-localhost}" &>/dev/null || true
+            chmod 644 "${key_file}" "${cert_file}" 2>/dev/null || true
+        else
+            warn "  ⚠️  openssl не установлен на хосте! Не удалось создать временный сертификат."
+        fi
+    fi
 
     if [[ ! -f "$cert_file" ]]; then
         warn "  ⚠️  Сертификат для '${domain}' НЕ НАЙДЕН в ${certs_dir}/"
@@ -1216,19 +1237,48 @@ svc = services[target_svc]
 vols = svc.get("volumes") or []
 if not isinstance(vols, list): vols = []
 
-def get_cont_path(val):
-    if isinstance(val, dict): return val.get("target", "")
-    parts = str(val).strip().split(":")
-    if not parts: return ""
-    if len(parts) == 1: return parts[0]
+def norm(p):
+    if not p: return ""
+    return os.path.normpath(p.strip()).replace('\\', '/').rstrip('/')
+
+def parse_vol(v):
+    if isinstance(v, dict):
+        return (v.get("source", ""), v.get("target", ""), "ro" if v.get("read_only") else "rw")
+    parts = str(v).strip().split(":")
+    if not parts: return ("", "", "")
+    if len(parts) == 1: return ("", parts[0], "")
+    if len(parts) == 2: return (parts[0], parts[1], "")
     last = parts[-1].strip()
     if last in ("ro", "rw", "z", "Z", "delegated", "cached", "consistent"):
-        return parts[-2].strip() if len(parts) >= 2 else ""
-    return last
+        return (parts[0], parts[1], last)
+    return (parts[0], parts[1], last)
 
-for v in vols:
-    if get_cont_path(v) == container_path:
-        print("ALREADY_EXISTS"); sys.exit(0)
+found = False
+changed = False
+for idx, v in enumerate(vols):
+    h, c, m = parse_vol(v)
+    if norm(c) == norm(container_path):
+        found = True
+        if norm(h) != norm(host_path):
+            if isinstance(v, dict):
+                v["source"] = host_path
+                v["read_only"] = (mode == "ro")
+            else:
+                vols[idx] = f"{host_path}:{container_path}:{mode}"
+            changed = True
+            break
+
+if found:
+    if changed:
+        svc["volumes"] = vols; services[target_svc] = svc; data["services"] = services
+        bak = compose_path.with_suffix(".yml.bak")
+        bak.write_text(compose_path.read_text(encoding="utf-8"), encoding="utf-8")
+        compose_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False), encoding="utf-8")
+        print(f"ADDED:{target_svc}")
+    else:
+        print("ALREADY_EXISTS")
+    sys.exit(0)
+
 vols.append(new_volume)
 svc["volumes"] = vols; services[target_svc] = svc; data["services"] = services
 bak = compose_path.with_suffix(".yml.bak")
@@ -1272,20 +1322,48 @@ if target_svc is None:
     print("SKIP"); sys.exit(0)
 svc = services[target_svc]
 vols = svc.get("volumes") or []
+if not isinstance(vols, list): vols = []
 
-def get_cont_path(val):
-    if isinstance(val, dict): return val.get("target", "")
-    parts = str(val).strip().split(":")
-    if not parts: return ""
-    if len(parts) == 1: return parts[0]
+def norm(p):
+    if not p: return ""
+    return os.path.normpath(p.strip()).replace('\\', '/').rstrip('/')
+
+def parse_vol(v):
+    if isinstance(v, dict):
+        return (v.get("source", ""), v.get("target", ""), "ro" if v.get("read_only") else "rw")
+    parts = str(v).strip().split(":")
+    if not parts: return ("", "", "")
+    if len(parts) == 1: return ("", parts[0], "")
+    if len(parts) == 2: return (parts[0], parts[1], "")
     last = parts[-1].strip()
     if last in ("ro", "rw", "z", "Z", "delegated", "cached", "consistent"):
-        return parts[-2].strip() if len(parts) >= 2 else ""
-    return last
+        return (parts[0], parts[1], last)
+    return (parts[0], parts[1], last)
 
-for v in vols:
-    if get_cont_path(v) == container_path:
-        print("ALREADY_EXISTS"); sys.exit(0)
+found = False
+changed = False
+for idx, v in enumerate(vols):
+    h, c, m = parse_vol(v)
+    if norm(c) == norm(container_path):
+        found = True
+        if norm(h) != norm(host_path):
+            if isinstance(v, dict):
+                v["source"] = host_path
+                v["read_only"] = (mode == "ro")
+            else:
+                vols[idx] = f"{host_path}:{container_path}:{mode}"
+            changed = True
+            break
+
+if found:
+    if changed:
+        svc["volumes"] = vols; services[target_svc] = svc; data["services"] = services
+        compose_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False), encoding="utf-8")
+        print(f"ADDED:{target_svc}")
+    else:
+        print("ALREADY_EXISTS")
+    sys.exit(0)
+
 vols.append(new_volume)
 svc["volumes"] = vols; services[target_svc] = svc; data["services"] = services
 compose_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False), encoding="utf-8")
@@ -1341,6 +1419,20 @@ _vgw_nginx_inject_auto() {
     local ntype="$1" cname="${2:-}" cpath="${3:-}" csrc="${4:-none}" domain="$5" gport="$6"
     local cert="" key=""
 
+    # ── Очистка сиротских конфигураций старого домена ──────────────────
+    local persist_inj="${_VGW_PERSIST_DIR}/nginx_injection.env"
+    if [[ -f "$persist_inj" ]]; then
+        local saved_domain
+        saved_domain=$(grep '^DOMAIN=' "$persist_inj" | cut -d= -f2-)
+        if [[ -n "$saved_domain" && "$saved_domain" != "$domain" ]]; then
+            info "Обнаружено изменение домена с '${saved_domain}' на '${domain}'."
+            info "Удаляю старые хостовые конфигурационные файлы nginx для '${saved_domain}'..."
+            rm -f "/etc/nginx/sites-available/${saved_domain}.conf" 2>/dev/null || true
+            rm -f "/etc/nginx/sites-enabled/${saved_domain}.conf" 2>/dev/null || true
+            rm -f "/etc/nginx/conf.d/${saved_domain}.conf" 2>/dev/null || true
+        fi
+    fi
+
     local is_fallback="0"
     if [[ "$ntype" == *":hostnet"* || "$ntype" == "host:nginx" ]]; then
         if [[ -n "$cpath" && -f "$cpath" ]]; then
@@ -1379,8 +1471,28 @@ _vgw_nginx_inject_auto() {
             local cdir conf_file
             cdir=$(_vgw_find_nginx_conf_dir)
             conf_file="${cdir}/${domain}.conf"
+
+            local new_conf_content
+            new_conf_content=$(_vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc")
+
+            local config_changed="1"
+            if [[ -f "$conf_file" ]]; then
+                local current_content; current_content=$(cat "$conf_file")
+                local current_clean; current_clean=$(echo "$current_content" | grep -v "# Создан:")
+                local new_clean; new_clean=$(echo "$new_conf_content" | grep -v "# Создан:")
+                if [[ "$current_clean" == "$new_clean" ]]; then
+                    config_changed="0"
+                fi
+            fi
+
+            if [[ "$config_changed" == "0" ]]; then
+                ok "Конфигурация Nginx в ${conf_file} уже актуальна и не изменилась — перезапуск не требуется."
+                _vgw_nginx_injection_save "host:nginx" "$conf_file" "$domain"
+                return 0
+            fi
+
             info "Создаю ${conf_file}..."
-            _vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" > "$conf_file" || {
+            echo "$new_conf_content" > "$conf_file" || {
                 printf_error "Не удалось создать ${conf_file}"; return 1
             }
             # Если sites-available → создаём симлинк в sites-enabled
@@ -1411,8 +1523,27 @@ _vgw_nginx_inject_auto() {
             fi
 
             # ── Шаг 2: Создаём конфиг nginx ─────────────────────
+            local new_conf_content
+            new_conf_content=$(_vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" "$cname")
+
+            local config_changed="1"
+            if [[ -f "$conf_host" ]]; then
+                local current_content; current_content=$(cat "$conf_host")
+                local current_clean; current_clean=$(echo "$current_content" | grep -v "# Создан:")
+                local new_clean; new_clean=$(echo "$new_conf_content" | grep -v "# Создан:")
+                if [[ "$current_clean" == "$new_clean" ]]; then
+                    config_changed="0"
+                fi
+            fi
+
+            if [[ "$config_changed" == "0" ]]; then
+                ok "Конфигурация Nginx в ${conf_host} уже актуальна и не изменилась — перезапуск не требуется."
+                _vgw_nginx_injection_save "docker:conf.d" "$conf_host" "$domain"
+                return 0
+            fi
+
             info "Создаю ${conf_host}..."
-            _vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" "$cname" > "$conf_host" || {
+            echo "$new_conf_content" > "$conf_host" || {
                 printf_error "Не удалось создать ${conf_host}"; return 1
             }
 
@@ -1445,7 +1576,27 @@ _vgw_nginx_inject_auto() {
 
             # ── Шаг 2: Инжект конфига через docker cp ───────────
             local tmp_conf="/tmp/_bedolaga_${domain}.conf"
-            _vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" "$cname" > "$tmp_conf"
+            local new_conf_content
+            new_conf_content=$(_vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" "$cname")
+
+            local config_changed="1"
+            local current_content
+            current_content=$(docker exec "$cname" cat "/etc/nginx/conf.d/80-bedolaga.conf" 2>/dev/null || echo "")
+            if [[ -n "$current_content" ]]; then
+                local current_clean; current_clean=$(echo "$current_content" | grep -v "# Создан:")
+                local new_clean; new_clean=$(echo "$new_conf_content" | grep -v "# Создан:")
+                if [[ "$current_clean" == "$new_clean" ]]; then
+                    config_changed="0"
+                fi
+            fi
+
+            if [[ "$config_changed" == "0" ]]; then
+                ok "Конфигурация Nginx внутри контейнера ${cname} уже актуальна и не изменилась — перезапуск не требуется."
+                _vgw_nginx_injection_save "docker:nginx" "/etc/nginx/conf.d/80-bedolaga.conf" "$domain"
+                return 0
+            fi
+
+            echo "$new_conf_content" > "$tmp_conf"
             docker cp "$tmp_conf" "${cname}:/etc/nginx/conf.d/80-bedolaga.conf" || return 1
             rm -f "$tmp_conf"
             docker exec "$cname" nginx -t && docker exec "$cname" nginx -s reload || return 1
