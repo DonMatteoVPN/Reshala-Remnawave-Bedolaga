@@ -1475,6 +1475,7 @@ _vgw_nginx_inject_auto() {
         CERT="$(_vgw_certs_dir)/fullchain.pem"
         KEY="$(_vgw_certs_dir)/privkey.pem"
         VOLUME_NEEDED="0"
+        _vgw_check_our_certs_exist "$domain"
     fi
 
     case "$ntype" in

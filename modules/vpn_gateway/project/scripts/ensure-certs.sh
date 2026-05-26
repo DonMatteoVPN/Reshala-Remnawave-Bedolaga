@@ -57,6 +57,17 @@ if [[ -z "${EDGE_DOMAIN}" ]]; then
   exit 1
 fi
 
+# Восстанавливаем из персистентного бэкапа если на хосте в edge/certs пусто
+PERSIST_CERTS_DIR="/etc/reshala-bedolaga/certs"
+if [[ ! -f "${FULLCHAIN}" || ! -f "${PRIVKEY}" ]]; then
+  if [[ -f "${PERSIST_CERTS_DIR}/fullchain.pem" && -f "${PERSIST_CERTS_DIR}/privkey.pem" ]]; then
+    echo "[info] Восстанавливаю существующий Let's Encrypt сертификат из персистентного бэкапа..."
+    cp -f "${PERSIST_CERTS_DIR}/fullchain.pem" "${FULLCHAIN}"
+    cp -f "${PERSIST_CERTS_DIR}/privkey.pem" "${PRIVKEY}"
+    chmod 600 "${PRIVKEY}"
+  fi
+fi
+
 if [[ -f "${FULLCHAIN}" && -f "${PRIVKEY}" ]]; then
   # Проверяем, совпадает ли домен в сертификате с текущим EDGE_DOMAIN
   cert_domain=$(openssl x509 -noout -subject -in "${FULLCHAIN}" 2>/dev/null | sed -n 's/^.*CN\s*=\s*\(.*\)$/\1/p' || echo "")
