@@ -436,11 +436,23 @@ show_vpn_gateway_menu() {
         # Умный статус-блок: установлен или нет
         _vgw_menu_status_block
         render_menu_items "vpn_gateway"
+        
+        # Инструкция по замене Webhook доступна, если домен настроен
+        local public_domain; public_domain=$(_vgw_read_quick_field public_domain 2>/dev/null || echo "")
+        if [[ -n "$public_domain" && "$public_domain" != "vpn.example.com" ]]; then
+            printf_menu_option "w" "📋 Инструкция по замене Webhook" "${C_CYAN}"
+        fi
+        
         echo ""
         printf_menu_option "b" "🔙 Назад в главное меню" "${C_CYAN}"
         print_separator "─" 64
         local choice; choice=$(safe_read "Твой выбор" "") || break
         [[ "$choice" =~ ^[bB]$ ]] && break
+        if [[ "$choice" =~ ^[wW]$ && -n "$public_domain" && "$public_domain" != "vpn.example.com" ]]; then
+            _vgw_warn_merchant_return
+            wait_for_enter
+            continue
+        fi
         local action; action=$(get_menu_action "vpn_gateway" "$choice")
         if [[ -n "$action" ]]; then eval "$action"; wait_for_enter; else printf_error "Нет такого пункта."; sleep 1; fi
     done
@@ -2619,6 +2631,7 @@ vgw_reconfigure_wizard(){
         fi
     fi
     _vgw_show_landing_status
+    _vgw_warn_merchant_return
 }
 vgw_run(){ _vgw_run_action run; }
 vgw_test(){ _vgw_run_action test; }
