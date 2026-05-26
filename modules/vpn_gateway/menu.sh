@@ -175,12 +175,56 @@ _vgw_certs_restore_if_needed() {
     chmod 600 "${certs_dir}/privkey.pem" 2>/dev/null || true
     ok "Сертификаты автоматически восстановлены из ${_VGW_PERSIST_CERTS_DIR}"
 
-    # Контейнер мог стартовать ДО восстановления (volume был пустым) — перезапускаем nginx
+    local reloaded=0
+
+    # 1. Проверяем vpn-edge-nginx (наш собственный контейнер)
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "vpn-edge-nginx"; then
-        ok "Перезапускаю nginx в контейнере чтобы подхватил сертификаты..."
+        ok "Перезапускаю nginx в контейнере чтобы подхватил сертификаты... vpn-edge-nginx"
         docker exec vpn-edge-nginx nginx -s reload 2>/dev/null || \
             docker restart vpn-edge-nginx 2>/dev/null || true
+        reloaded=1
     fi
+
+    # 2. Если есть внедрённый внешний Nginx (через nginx_injection.env)
+    local persist_inj="${_VGW_PERSIST_DIR}/nginx_injection.env"
+    if [[ -f "$persist_inj" ]]; then
+        local saved_type saved_file saved_domain
+        saved_type=$(grep '^NGINX_TYPE=' "$persist_inj" | cut -d= -f2-)
+        saved_file=$(grep '^CONF_FILE=' "$persist_inj" | cut -d= -f2-)
+        saved_domain=$(grep '^DOMAIN=' "$persist_inj" | cut -d= -f2-)
+
+        if [[ "$saved_type" == "host:nginx" ]]; then
+            if nginx -t 2>/dev/null; then
+                ok "Перезапускаю хостовой nginx..."
+                systemctl reload nginx 2>/dev/null || service nginx reload 2>/dev/null || true
+                reloaded=1
+            fi
+        elif [[ "$saved_type" == "docker:conf.d" || "$saved_type" == "docker:nginx" ]]; then
+            # Находим контейнер с внешним nginx (исключая наш vpn-edge-nginx)
+            local cname; cname=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i nginx | grep -v vpn-edge-nginx | head -1)
+            if [[ -n "$cname" ]]; then
+                ok "Перезапускаю nginx в контейнере чтобы подхватил сертификаты... ${cname}"
+                docker exec "$cname" nginx -t 2>/dev/null && docker exec "$cname" nginx -s reload 2>/dev/null || \
+                    docker restart "$cname" 2>/dev/null || true
+                reloaded=1
+            fi
+        fi
+    fi
+
+    # 3. Дефолтный фоллбек (если ничего не перезапустили, но есть запущенный nginx контейнер)
+    if [[ "$reloaded" -eq 0 ]]; then
+        local any_nginx; any_nginx=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i nginx | grep -v vpn-edge-nginx | head -1)
+        if [[ -n "$any_nginx" ]]; then
+            ok "Перезапускаю nginx в контейнере чтобы подхватил сертификаты... ${any_nginx}"
+            docker exec "$any_nginx" nginx -t 2>/dev/null && docker exec "$any_nginx" nginx -s reload 2>/dev/null || \
+                docker restart "$any_nginx" 2>/dev/null || true
+        fi
+    fi
+}
+
+_vgw_auto_restore_on_boot() {
+    _vgw_cfg_restore_if_needed
+    _vgw_certs_restore_if_needed
 }
 
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v3.100                        == #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v3.101                        == #
 # ============================================================ #
 #
 # Точка входа. Этот скрипт — прораб. Он только отдаёт команды
@@ -26,7 +26,7 @@ export SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 # что приводит к "chdir: error: getcwd: cannot access parent directories"
 cd "$SCRIPT_DIR" 2>/dev/null || cd / || true
 
-readonly VERSION="v3.100"
+readonly VERSION="v3.101"
 
 # ============================================================ #
 #              ПОДГОТОВКА И ЗАГРУЗКА КОМПОНЕНТОВ               #
@@ -414,6 +414,12 @@ main() {
 
     log "Запуск фреймворка Решала ${VERSION}"
     run_module core/self_update check_for_updates
+
+    # Автоматическое восстановление конфига и сертификатов Bedolaga при запуске / после обновлений
+    if [[ -f "${SCRIPT_DIR}/modules/vpn_gateway/menu.sh" ]]; then
+        run_module vpn_gateway/menu _vgw_auto_restore_on_boot 2>/dev/null || true
+    fi
+
     show_main_menu
 }
 
