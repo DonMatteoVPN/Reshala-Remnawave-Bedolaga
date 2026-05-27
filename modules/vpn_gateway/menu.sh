@@ -219,11 +219,14 @@ _vgw_certs_restore_if_needed() {
                 systemctl reload nginx 2>/dev/null || service nginx reload 2>/dev/null || true
                 reloaded=1
             fi
-        elif [[ "$saved_type" == "docker:conf.d" || "$saved_type" == "docker:nginx" ]]; then
+        elif [[ "$saved_type" == "docker:conf.d" || "$saved_type" == "docker:templates" || "$saved_type" == "docker:monolith" || "$saved_type" == "docker:nginx" ]]; then
             # Находим контейнер с внешним nginx (исключая наш vpn-edge-nginx)
             local cname; cname=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i nginx | grep -v vpn-edge-nginx | head -1)
             if [[ -n "$cname" ]]; then
                 ok "Перезапускаю nginx в контейнере чтобы подхватил сертификаты... ${cname}"
+                if [[ "$saved_type" == "docker:monolith" ]]; then
+                    _vgw_prepare_monolith_certs "$saved_domain"
+                fi
                 docker exec "$cname" nginx -t 2>/dev/null && docker exec "$cname" nginx -s reload 2>/dev/null || \
                     docker restart "$cname" 2>/dev/null || true
                 reloaded=1
@@ -673,11 +676,29 @@ _vgw_smart_nginx_detect() {
                 echo "docker:conf.d:${cname}:${confd_host}"; return 0
             fi
 
+            # Тип 4.5: модульный templates (bind mount /etc/nginx/templates → хост-директория)
+            local templates_host
+            templates_host=$(docker inspect "$cname" 2>/dev/null \
+                --format='{{range .Mounts}}{{if eq .Destination "/etc/nginx/templates"}}{{.Source}}{{end}}{{end}}' \
+                | head -1)
+            if [[ -n "$templates_host" && -d "$templates_host" ]]; then
+                echo "docker:templates:${cname}:${templates_host}"; return 0
+            fi
+
             # Тип 3: network_mode host (remnawave-node стиль)
             local netmode
             netmode=$(docker inspect "$cname" 2>/dev/null \
                 --format='{{.HostConfig.NetworkMode}}' | head -1)
             if [[ "$netmode" == "host" ]]; then
+                # Тип 3.5: network_mode host с монолитным шаблоном (bind mount /etc/nginx/nginx.conf.template)
+                local monolith_host
+                monolith_host=$(docker inspect "$cname" 2>/dev/null \
+                    --format='{{range .Mounts}}{{if eq .Destination "/etc/nginx/nginx.conf.template"}}{{.Source}}{{end}}{{end}}' \
+                    | head -1)
+                if [[ -n "$monolith_host" && -f "$monolith_host" ]]; then
+                    echo "docker:monolith:${cname}:${monolith_host}"; return 0
+                fi
+
                 # пытаемся найти путь к nginx.conf через bind mounts
                 local nginx_conf_host
                 nginx_conf_host=$(docker inspect "$cname" 2>/dev/null \
@@ -999,6 +1020,16 @@ NGINXCONF
 }
 
 # Сохраняет данные об инжектированном nginx-конфиге в /etc/reshala-bedolaga/
+_vgw_prepare_monolith_certs() {
+    local domain="$1"
+    local persist_certs_dir; persist_certs_dir="$(_vgw_certs_dir)"
+    
+    mkdir -p "/etc/letsencrypt/live/${domain}"
+    cp -f "${persist_certs_dir}/fullchain.pem" "/etc/letsencrypt/live/${domain}/fullchain.pem"
+    cp -f "${persist_certs_dir}/privkey.pem" "/etc/letsencrypt/live/${domain}/privkey.pem"
+    chmod 644 "/etc/letsencrypt/live/${domain}/fullchain.pem" "/etc/letsencrypt/live/${domain}/privkey.pem"
+}
+
 _vgw_nginx_injection_save() {
     local nginx_type="$1" conf_file="$2" domain="$3"
     mkdir -p "${_VGW_PERSIST_DIR}" 2>/dev/null || true
@@ -1048,6 +1079,18 @@ _vgw_detect_show_plan() {
             echo -e "  ${C}║${E}  conf.d:     ${G}${cpath}${E}"
             echo -e "  ${C}║${E}  Gateway:    порт ${G}${gport}${E}"
             ;;
+        docker:templates:*)
+            echo -e "  ${C}║${E}  Тип:        ${W}Docker nginx с шаблонами templates${E}"
+            echo -e "  ${C}║${E}  Контейнер:  ${G}${cname}${E}"
+            echo -e "  ${C}║${E}  templates:  ${G}${cpath}${E}"
+            echo -e "  ${C}║${E}  Gateway:    порт ${G}${gport}${E}"
+            ;;
+        docker:monolith:*)
+            echo -e "  ${C}║${E}  Тип:        ${W}Docker nginx с монолитным шаблоном (hostnet)${E}"
+            echo -e "  ${C}║${E}  Контейнер:  ${G}${cname}${E}"
+            echo -e "  ${C}║${E}  Шаблон:     ${G}${cpath}${E}"
+            echo -e "  ${C}║${E}  Gateway:    порт ${G}${gport}${E}"
+            ;;
         docker:hostnet:*)
             echo -e "  ${C}║${E}  Тип:        ${R}Docker nginx (network_mode:host, unix-сокеты)${E}"
             echo -e "  ${C}║${E}  Контейнер:  ${G}${cname}${E}"
@@ -1095,6 +1138,28 @@ _vgw_detect_show_plan() {
                 echo -e "  ${C}║${E}  4. Создать ${G}${cpath}/80-bedolaga.conf${E}"
                 echo -e "  ${C}║${E}  5. docker exec ${cname} nginx -t && nginx -s reload"
             fi
+            echo -e "  ${C}║${E}  Gateway на порту ${G}${gport}${E}"
+            ;;
+        docker:templates:*)
+            if [[ "$VOLUME_NEEDED" == "0" && ( "$CSRC_EFFECTIVE" == "certwarden" || "$CSRC_EFFECTIVE" == "letsencrypt" ) ]]; then
+                echo -e "  ${C}║${E}  1. ${G}Сертификаты уже смонтированы (${CSRC_EFFECTIVE})${E}"
+                echo -e "  ${C}║${E}  2. Создать шаблон ${G}${cpath}/80-bedolaga.conf.template${E}"
+                echo -e "  ${C}║${E}  3. Запустить envsubst и перезагрузить Nginx"
+            else
+                echo -e "  ${C}║${E}  1. Найти docker-compose.yml контейнера ${G}${cname}${E}"
+                echo -e "  ${C}║${E}  2. ${G}Автоматически добавить volume сертификатов${E}"
+                echo -e "     ${G}${VOLUME_HOST:-$(_vgw_certs_dir)}:${VOLUME_CONT:-/etc/nginx/certs}:ro${E}"
+                echo -e "  ${C}║${E}  3. Перезапустить контейнер ${G}${cname}${E}"
+                echo -e "  ${C}║${E}  4. Создать шаблон ${G}${cpath}/80-bedolaga.conf.template${E}"
+                echo -e "  ${C}║${E}  5. Запустить envsubst и Nginx reload"
+            fi
+            echo -e "  ${C}║${E}  Gateway на порту ${G}${gport}${E}"
+            ;;
+        docker:monolith:*)
+            echo -e "  ${C}║${E}  1. Автоматически прописать домен в stream-роутинг"
+            echo -e "  ${C}║${E}  2. Автоматически добавить server блок в http-секцию монолита"
+            echo -e "  ${C}║${E}  3. ${G}Сертификаты будут настроены на хостовые пути (/etc/letsencrypt)${E}"
+            echo -e "  ${C}║${E}  4. Перезапустить контейнер ${G}${cname}${E} для применения envsubst"
             echo -e "  ${C}║${E}  Gateway на порту ${G}${gport}${E}"
             ;;
         *)
@@ -1601,8 +1666,14 @@ _vgw_nginx_inject_auto() {
             _vgw_nginx_injection_save "host:nginx" "$conf_file" "$domain"
             ;;
 
-        docker:conf.d|docker:conf.d:*)
-            local conf_host="${cpath}/80-bedolaga.conf"
+        docker:conf.d|docker:conf.d:*|docker:templates|docker:templates:*)
+            local is_templates=0
+            local conf_file_name="80-bedolaga.conf"
+            if [[ "$ntype" == "docker:templates"* ]]; then
+                is_templates=1
+                conf_file_name="80-bedolaga.conf.template"
+            fi
+            local conf_host="${cpath}/${conf_file_name}"
 
             # ── Шаг 0.5: Убеждаемся, что сертификаты УЖЕ лежат на хосте ДО перезапуска контейнера ──
             if [[ "$VOLUME_NEEDED" == "1" && "$CERT" == "/etc/nginx/certs/"* ]]; then
@@ -1684,9 +1755,21 @@ PY
             local new_conf_content
             new_conf_content=$(_vgw_nginx_generate_conf "$domain" "$gport" "$CERT" "$KEY" "$csrc" "$cname")
 
+            if [[ "$is_templates" -eq 1 ]]; then
+                # Экранируем Nginx переменные для envsubst шаблона
+                new_conf_content=$(echo "$new_conf_content" | sed 's/\$host/\$\\\$host/g' \
+                                                             | sed 's/\$request_uri/\$\\\$request_uri/g' \
+                                                             | sed 's/\$remote_addr/\$\\\$remote_addr/g' \
+                                                             | sed 's/\$proxy_add_x_forwarded_for/\$\\\$proxy_add_x_forwarded_for/g' \
+                                                             | sed 's/\$scheme/\$\\\$scheme/g' \
+                                                             | sed 's/\$http_upgrade/\$\\\$http_upgrade/g')
+            fi
+
             local config_changed="1"
-            if [[ -f "$conf_host" ]]; then
-                local current_content; current_content=$(cat "$conf_host")
+            local current_content=""
+            current_content=$(cat "$conf_host" 2>/dev/null || echo "")
+
+            if [[ -n "$current_content" ]]; then
                 local current_clean; current_clean=$(echo "$current_content" | grep -v "# Создан:")
                 local new_clean; new_clean=$(echo "$new_conf_content" | grep -v "# Создан:")
                 if [[ "$current_clean" == "$new_clean" ]]; then
@@ -1715,7 +1798,11 @@ PY
 
             if [[ "$config_changed" == "0" && "$is_self_signed_pre" -eq 0 ]]; then
                 ok "Конфигурация Nginx в ${conf_host} уже актуальна и не изменилась — перезапуск не требуется."
-                _vgw_nginx_injection_save "docker:conf.d" "$conf_host" "$domain"
+                if [[ "$is_templates" -eq 1 ]]; then
+                    _vgw_nginx_injection_save "docker:templates" "$conf_host" "$domain"
+                else
+                    _vgw_nginx_injection_save "docker:conf.d" "$conf_host" "$domain"
+                fi
                 return 0
             fi
 
@@ -1725,6 +1812,13 @@ PY
             }
 
             # ── Шаг 3: Проверяем конфиг nginx внутри контейнера ─
+            if [[ "$is_templates" -eq 1 ]]; then
+                # Компилируем шаблон внутри контейнера с заменой переменных (для корректной проверки и немедленного подхвата)
+                docker exec "$cname" sh -c "envsubst < /etc/nginx/templates/80-bedolaga.conf.template > /etc/nginx/conf.d/80-bedolaga.conf" || {
+                    printf_error "Не удалось скомпилировать шаблон в контейнере!"; rm -f "$conf_host"; return 1
+                }
+            fi
+
             local nginx_test_output
             nginx_test_output=$(docker exec "$cname" nginx -t 2>&1)
             if [[ $? -ne 0 ]]; then
@@ -1732,6 +1826,9 @@ PY
                 warn "Вывод nginx -t:"
                 echo "$nginx_test_output" | head -20 | sed 's/^/  /'
                 rm -f "$conf_host"
+                if [[ "$is_templates" -eq 1 ]]; then
+                    docker exec "$cname" rm -f "/etc/nginx/conf.d/80-bedolaga.conf" 2>/dev/null
+                fi
                 # Восстанавливаем backup docker-compose.yml если он был создан
                 local compose_file; compose_file=$(_vgw_find_compose_file "$cname")
                 [[ -f "${compose_file}.bak" ]] && cp -f "${compose_file}.bak" "$compose_file" 2>/dev/null || true
@@ -1740,7 +1837,193 @@ PY
 
             # ── Шаг 4: Reload nginx ──────────────────────────────
             docker exec "$cname" nginx -s reload && ok "Docker nginx (${cname}) перезагружен!" || return 1
-            _vgw_nginx_injection_save "docker:conf.d" "$conf_host" "$domain"
+            if [[ "$is_templates" -eq 1 ]]; then
+                _vgw_nginx_injection_save "docker:templates" "$conf_host" "$domain"
+            else
+                _vgw_nginx_injection_save "docker:conf.d" "$conf_host" "$domain"
+            fi
+            ;;
+
+        docker:monolith|docker:monolith:*)
+            # ── Шаг 0.5: Убеждаемся, что сертификаты УЖЕ лежат на хосте ──
+            _vgw_check_our_certs_exist "$domain"
+            _vgw_prepare_monolith_certs "$domain"
+
+            # Определяем IP хоста для проксирования из контейнера
+            local upstream_host="127.0.0.1"
+            if [[ -n "$cname" ]] && command -v docker &>/dev/null; then
+                local gw_ip
+                gw_ip=$(docker inspect "$cname" --format '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' 2>/dev/null | head -n1)
+                if [[ -n "$gw_ip" ]]; then
+                    upstream_host="$gw_ip"
+                fi
+            fi
+
+            # Путь к сертификату внутри контейнера Nginx
+            local monolith_cert_path="/etc/letsencrypt/live/${domain}"
+
+            # Создаём бэкап nginx.conf.template перед инъекцией
+            if [[ ! -f "${cpath}.bak" ]]; then
+                cp -f "$cpath" "${cpath}.bak"
+            fi
+
+            # Выполняем инъекцию с помощью встроенного Python
+            local inject_res
+            inject_res=$("$(_vgw_python)" - "$cpath" "$domain" "$upstream_host" "$gport" "$monolith_cert_path" <<'PY'
+import sys, re
+
+filepath = sys.argv[1]
+domain = sys.argv[2]
+upstream_ip = sys.argv[3]
+upstream_port = sys.argv[4]
+ssl_cert_path = sys.argv[5]
+
+with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+    content = f.read()
+
+# Check if already injected
+if f"server_name {domain};" in content or f"server_name  {domain};" in content:
+    print("Already injected")
+    sys.exit(0)
+
+# 1. Inject to map $ssl_preread_server_name $route_to
+pattern = r'(map\s+\$ssl_preread_server_name\s+\$route_to\s*\{)'
+match = re.search(pattern, content)
+if not match:
+    sys.exit(1)
+
+insertion = f"\n        {domain}    unix:/dev/shm/nginx_http.sock;"
+idx = match.end()
+content = content[:idx] + insertion + content[idx:]
+
+# 2. Inject server blocks to the end of http {}
+last_brace_idx = content.rfind('}')
+if last_brace_idx == -1:
+    sys.exit(1)
+
+server_block = f'''
+    # ==========================================================================
+    # BEDOLAGA LANDING - AUTOMATICALLY INJECTED
+    # ==========================================================================
+    server {{
+        listen 80;
+        listen [::]:80;
+        server_name {domain};
+
+        location ^~ /.well-known/acme-challenge/ {{
+            root /var/www/acme-challenge;
+            try_files $uri =404;
+        }}
+
+        location / {{
+            return 301 https://$host$request_uri;
+        }}
+    }}
+
+    server {{
+        listen unix:/dev/shm/nginx_http.sock proxy_protocol ssl;
+        http2 on;
+        server_name {domain};
+
+        set_real_ip_from unix:;
+        real_ip_header proxy_protocol;
+
+        access_log /var/log/nginx_custom/bedolaga_access.log;
+        error_log /var/log/nginx_custom/bedolaga_error.log;
+
+        ssl_certificate     "{ssl_cert_path}/fullchain.pem";
+        ssl_certificate_key "{ssl_cert_path}/privkey.pem";
+        ssl_trusted_certificate "{ssl_cert_path}/fullchain.pem";
+
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options nosniff;
+        add_header X-Frame-Options DENY;
+        add_header X-Robots-Tag "noindex, nofollow, nosnippet, noarchive";
+
+        location / {{
+            proxy_pass https://{upstream_ip}:{upstream_port};
+            proxy_http_version 1.1;
+            proxy_ssl_verify off;
+            
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 60s;
+            proxy_read_timeout 60s;
+        }}
+    }}
+'''
+
+content = content[:last_brace_idx] + server_block + "\n" + content[last_brace_idx:]
+
+with open(filepath, 'w', encoding='utf-8') as f:
+    f.write(content)
+
+print("Extraction successful")
+PY
+)
+            if [[ $? -ne 0 ]]; then
+                printf_error "Не удалось внести изменения в nginx.conf.template!"
+                [[ -f "${cpath}.bak" ]] && cp -f "${cpath}.bak" "$cpath"
+                return 1
+            fi
+
+            # Перезапускаем контейнер Nginx для выполнения envsubst и перезапуска сервиса
+            local compose_file; compose_file=$(_vgw_find_compose_file "$cname")
+            if [[ -n "$compose_file" ]]; then
+                local compose_dir; compose_dir=$(dirname "$compose_file")
+                local dc_cmd="docker compose"
+                command -v docker-compose &>/dev/null && ! docker compose version &>/dev/null && dc_cmd="docker-compose"
+                
+                local svc_name
+                svc_name=$(COMPOSE_FILE="$compose_file" CNAME="$cname" "$(_vgw_python)" - <<'PY'
+import os, sys, yaml
+from pathlib import Path
+try:
+    data = yaml.safe_load(Path(os.environ["COMPOSE_FILE"]).read_text(encoding="utf-8")) or {}
+    services = data.get("services") or {}
+    for s_name, s in services.items():
+        if isinstance(s, dict) and s.get("container_name", "") == os.environ["CNAME"]:
+            print(s_name); sys.exit(0)
+    for s_name, s in services.items():
+        if "nginx" in s_name.lower():
+            print(s_name); sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+PY
+)
+                if [[ -n "$svc_name" ]]; then
+                    ( cd "$compose_dir" && $dc_cmd up -d --force-recreate "$svc_name" 2>&1 ) || true
+                    sleep 3
+                fi
+            fi
+
+            # Проверяем синтаксис внутри перезапущенного контейнера
+            local nginx_test_output
+            nginx_test_output=$(docker exec "$cname" nginx -t 2>&1)
+            if [[ $? -ne 0 ]]; then
+                printf_error "nginx -t в контейнере ОШИБКА! Откатываю..."
+                warn "Вывод nginx -t:"
+                echo "$nginx_test_output" | head -20 | sed 's/^/  /'
+                [[ -f "${cpath}.bak" ]] && cp -f "${cpath}.bak" "$cpath"
+                if [[ -n "$compose_file" && -n "$svc_name" ]]; then
+                    ( cd "$compose_dir" && $dc_cmd up -d --force-recreate "$svc_name" 2>&1 ) || true
+                fi
+                return 1
+            fi
+
+            ok "Монолитный Nginx в контейнере ${cname} успешно настроен и перезапущен!"
+            _vgw_nginx_injection_save "docker:monolith" "$cpath" "$domain"
             ;;
 
         docker:nginx|docker:nginx:*)
@@ -2160,7 +2443,11 @@ EOF
             echo -e "  ${G}  nginx -t && systemctl reload nginx${E}"
             ;;
 
-        docker:conf.d:*)
+        docker:conf.d:*|docker:templates:*)
+            local ext="conf"
+            if [[ "$ntype" == *"templates"* ]]; then
+                ext="conf.template"
+            fi
             if [[ "$docker_mount_notice" == "1" ]]; then
                 # Volume нужен — показываем полную процедуру
                 local compose_hint
@@ -2186,7 +2473,7 @@ EOF
                 echo -e "  ${G}  docker compose up -d <имя-сервиса-nginx>${E}"
                 echo ""
                 echo -e "  ${B}Шаг 3${E}: Создайте файл конфига Bedolaga"
-                echo -e "  ${G}  nano ${cpath}/80-bedolaga.conf${E}"
+                echo -e "  ${G}  nano ${cpath}/80-bedolaga.${ext}${E}"
                 echo ""
                 echo -e "  ${B}Шаг 4${E}: Вставьте содержимое:"
             else
@@ -2194,12 +2481,21 @@ EOF
                 echo -e "  ✅ Сертификаты уже смонтированы (${csrc_type}). Только создать конфиг."
                 echo ""
                 echo -e "  ${B}Шаг 1${E}: Создайте файл конфига Bedolaga"
-                echo -e "  ${G}  nano ${cpath}/80-bedolaga.conf${E}"
+                echo -e "  ${G}  nano ${cpath}/80-bedolaga.${ext}${E}"
                 echo ""
                 echo -e "  ${B}Шаг 2${E}: Вставьте содержимое:"
             fi
             echo "  ────────────────────────────────────────────────────"
-            echo "$conf_content" | sed 's/^/  /'
+            local printable_content="$conf_content"
+            if [[ "$ntype" == *"templates"* ]]; then
+                printable_content=$(echo "$conf_content" | sed 's/\$host/\$\\\$host/g' \
+                                                             | sed 's/\$request_uri/\$\\\$request_uri/g' \
+                                                             | sed 's/\$remote_addr/\$\\\$remote_addr/g' \
+                                                             | sed 's/\$proxy_add_x_forwarded_for/\$\\\$proxy_add_x_forwarded_for/g' \
+                                                             | sed 's/\$scheme/\$\\\$scheme/g' \
+                                                             | sed 's/\$http_upgrade/\$\\\$http_upgrade/g')
+            fi
+            echo "$printable_content" | sed 's/^/  /'
             echo "  ────────────────────────────────────────────────────"
             echo ""
             if [[ "$docker_mount_notice" == "1" ]]; then
@@ -2207,8 +2503,26 @@ EOF
             else
                 echo -e "  ${B}Шаг 3${E}: Проверьте и перезагрузите nginx"
             fi
+            if [[ "$ntype" == *"templates"* ]]; then
+                echo -e "  ${G}  docker exec ${cname} sh -c \"envsubst < /etc/nginx/templates/80-bedolaga.conf.template > /etc/nginx/conf.d/80-bedolaga.conf\"${E}"
+            fi
             echo -e "  ${G}  docker exec ${cname} nginx -t${E}"
             echo -e "  ${G}  docker exec ${cname} nginx -s reload${E}"
+            ;;
+        docker:monolith:*)
+            echo -e "  ${R}${B}🐳 РУЧНЫЕ ШАГИ ДЛЯ МОНОЛИТНОГО ШАБЛОНА:${E}"
+            echo ""
+            echo -e "  ${B}Шаг 1${E}: Добавьте домен в секцию stream -> map в файле:"
+            echo -e "  ${G}  ${cpath}${E}"
+            echo -e "  Добавьте строчку:"
+            echo -e "  ${G}  ${domain}    unix:/dev/shm/nginx_http.sock;${E}"
+            echo ""
+            echo -e "  ${B}Шаг 2${E}: Добавьте server-блоки в http-секцию в конце файла:"
+            echo "  ────────────────────────────────────────────────────"
+            echo "$conf_content" | sed 's/^/  /'
+            echo "  ────────────────────────────────────────────────────"
+            echo ""
+            echo -e "  ${B}Шаг 3${E}: Перезагрузите контейнер Nginx"
             ;;
 
         docker:hostnet:*)
@@ -2552,7 +2866,7 @@ vgw_install_wizard(){
 
         # Разбираем компоненты строки типа
         case "$nginx_type" in
-            docker:conf.d:*:*)
+            docker:conf.d:*:*|docker:templates:*:*|docker:monolith:*:*)
                 cname=$(echo "$nginx_type" | cut -d: -f3)
                 cpath=$(echo "$nginx_type" | cut -d: -f4-)
                 ;;
@@ -2672,13 +2986,79 @@ _vgw_rollback_nginx_injection() {
                     if nginx -t 2>/dev/null; then systemctl reload nginx 2>/dev/null || true; fi
                     ok "Конфиг удалён из хостового nginx"
                     ;;
-                docker:conf.d)
+                docker:conf.d|docker:templates)
                     rm -f "$saved_file" 2>/dev/null
+                    if [[ "$saved_type" == "docker:templates" ]]; then
+                        local cname; cname=$(docker ps --format '{{.Names}}' | grep -i nginx | grep -v vpn-edge-nginx | head -1)
+                        if [[ -n "$cname" ]]; then
+                            docker exec "$cname" rm -f "/etc/nginx/conf.d/80-bedolaga.conf" 2>/dev/null
+                        fi
+                    fi
                     # Ищем контейнер с nginx
                     local cname; cname=$(docker ps --format '{{.Names}}' | grep -i nginx | grep -v vpn-edge-nginx | head -1)
                     if [[ -n "$cname" ]]; then
                         if docker exec "$cname" nginx -t 2>/dev/null; then docker exec "$cname" nginx -s reload 2>/dev/null || true; fi
                         ok "Конфиг удалён из docker nginx (${cname})"
+                    fi
+                    ;;
+                docker:monolith)
+                    if [[ -f "${saved_file}.bak" ]]; then
+                        cp -f "${saved_file}.bak" "$saved_file"
+                        rm -f "${saved_file}.bak"
+                    else
+                        "$(_vgw_python)" - "$saved_file" "$saved_domain" <<'PY'
+import sys
+filepath = sys.argv[1]
+domain = sys.argv[2]
+with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+    content = f.read()
+target_map = f"\n        {domain}    unix:/dev/shm/nginx_http.sock;"
+if target_map in content:
+    content = content.replace(target_map, "")
+start_marker = f"# ==========================================================================\n    # BEDOLAGA LANDING - AUTOMATICALLY INJECTED"
+idx = content.find(start_marker)
+if idx != -1:
+    last_brace = content.rfind('}')
+    second_last_brace = content.rfind('}', 0, last_brace)
+    if second_last_brace > idx:
+        content = content[:idx] + content[second_last_brace + 1:]
+with open(filepath, 'w', encoding='utf-8') as f:
+    f.write(content)
+PY
+                    fi
+                    rm -rf "/etc/letsencrypt/live/${saved_domain}"
+                    local cname; cname=$(docker ps --format '{{.Names}}' | grep -i nginx | grep -v vpn-edge-nginx | head -1)
+                    if [[ -n "$cname" ]]; then
+                        local compose_file; compose_file=$(_vgw_find_compose_file "$cname")
+                        if [[ -n "$compose_file" ]]; then
+                            local compose_dir; compose_dir=$(dirname "$compose_file")
+                            local dc_cmd="docker compose"
+                            command -v docker-compose &>/dev/null && ! docker compose version &>/dev/null && dc_cmd="docker-compose"
+                            local svc_name
+                            svc_name=$(COMPOSE_FILE="$compose_file" CNAME="$cname" "$(_vgw_python)" - <<'PY'
+import os, sys, yaml
+from pathlib import Path
+try:
+    data = yaml.safe_load(Path(os.environ["COMPOSE_FILE"]).read_text(encoding="utf-8")) or {}
+    services = data.get("services") or {}
+    for s_name, s in services.items():
+        if isinstance(s, dict) and s.get("container_name", "") == os.environ["CNAME"]:
+            print(s_name); sys.exit(0)
+    for s_name, s in services.items():
+        if "nginx" in s_name.lower():
+            print(s_name); sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+PY
+)
+                            if [[ -n "$svc_name" ]]; then
+                                ( cd "$compose_dir" && $dc_cmd up -d --force-recreate "$svc_name" 2>&1 ) || true
+                            fi
+                        else
+                            docker restart "$cname" || true
+                        fi
+                        ok "Конфиг монолита откачен, Nginx перезапущен"
                     fi
                     ;;
                 docker:nginx)
