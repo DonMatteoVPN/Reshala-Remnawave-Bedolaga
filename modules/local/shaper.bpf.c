@@ -106,6 +106,23 @@ struct {
 static __always_inline int process_packet(
     struct __sk_buff *skb, __u32 direction, void *user_map)
 {
+    /* Pull L2+L3+L4 headers into the linear area before touching them.
+     *
+     * On virtio-net (any KVM guest) the skb handed to tc ingress often keeps
+     * only the ethernet header linear, with the IP header already sitting in a
+     * page fragment. Direct packet access is limited to the linear part, so
+     * without this the `(ip + 1) > data_end` check below rejects most packets
+     * and they leave through TC_ACT_OK — neither accounted nor shaped.
+     *
+     * TCP mostly hides this because GRO pulls its headers up; UDP does not, so
+     * UDP-based protocols end up effectively unlimited on ingress.
+     *
+     * 62 = 14 (eth) + 40 (ipv6, the larger of the two) + 8 (udp). The helper
+     * invalidates every pointer the verifier checked earlier, so data/data_end
+     * are read after it. */
+    __u32 need = skb->len < 62 ? skb->len : 62;
+    bpf_skb_pull_data(skb, need);
+
     void *data     = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
 
