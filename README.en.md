@@ -11,10 +11,20 @@
 
 <p align="center">
   <br>
-  <strong>⚠️ ATTENTION: THIS PROJECT IS IN ACTIVE DEVELOPMENT ⚠️</strong>
-  <br>
-  <em>Use at your own risk. Bugs and unpredictable behavior are expected.</em>
-  <br>
+  <strong>⚠️ ATTENTION ⚠️
+<br> 🚀 An important update for everyone!
+
+I am preparing to launch a new store where I will bring together all my projects and solutions. You will find both paid and completely FREE options there.
+
+⚠️ Due to this launch, I am discontinuing support and updates for the "Reshala" script.
+
+📦 What’s next:
+I will soon release a final update to the repository. I will include all relevant information directly within the script's code so you stay informed about changes and can smoothly transition to the new solutions.
+</strong>
+<br>
+<br>
+<em>Use this script at your own risk. Bugs and unpredictable behavior may occur.</em>
+<br>
 </p>
 
 ### 🎯 THE BIG PICTURE
